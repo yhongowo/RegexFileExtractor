@@ -1,0 +1,47 @@
+{
+  "platform": "macOS arm64 / Apple M4 Pro / Go 1.27.1",
+  "baseline": {
+    "startup": {
+      "gc_count": 7,
+      "goarch": "arm64",
+      "goos": "darwin",
+      "goroutines": 11,
+      "heap_live_bytes": 64995360,
+      "heap_sys_bytes": 112525312,
+      "total_alloc_bytes": 173951528
+    },
+    "after_resize": {
+      "gc_count": 8,
+      "goarch": "arm64",
+      "goos": "darwin",
+      "goroutines": 11,
+      "heap_live_bytes": 65023280,
+      "heap_sys_bytes": 116621312,
+      "total_alloc_bytes": 217140640
+    },
+    "peak_rss_bytes": 249593856
+  },
+  "optimized": {
+    "startup": {
+      "gc_count": 8,
+      "goarch": "arm64",
+      "goos": "darwin",
+      "goroutines": 11,
+      "heap_live_bytes": 13543728,
+      "heap_sys_bytes": 66387968,
+      "total_alloc_bytes": 85782088
+    },
+    "after_resize": {
+      "gc_count": 12,
+      "goarch": "arm64",
+      "goos": "darwin",
+      "goroutines": 11,
+      "heap_live_bytes": 13569280,
+      "heap_sys_bytes": 66322432,
+      "total_alloc_bytes": 122521216
+    },
+    "peak_rss_bytes": 176914432
+  },
+  "baseline_benchmark": "goos: darwin\ngoarch: arm64\npkg: regexfileextractor/internal/ui\ncpu: Apple M4 Pro\nBenchmarkWindowResize-12        \t    8504\t    261082 ns/op\t  246923 B/op\t    2598 allocs/op\nBenchmarkPreviewSelection-12    \t     356\t   6555952 ns/op\t11976464 B/op\t  105724 allocs/op\nPASS\nok  \tregexfileextractor/internal/ui\t6.449s\n",
+  "optimized_benchmark": "goos: darwin\ngoarch: arm64\npkg: regexfileextractor/internal/ui\ncpu: Apple M4 Pro\nBenchmarkWindowResize-12        \t   18201\t    131877 ns/op\t  244320 B/op\t    1513 allocs/op\nBenchmarkPreviewSelection-12    \t    1048\t   2275572 ns/op\t 2100630 B/op\t   60906 allocs/op\nPASS\nok  \tregexfileextractor/internal/ui\t6.884s\n"
+}

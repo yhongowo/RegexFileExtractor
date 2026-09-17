@@ -1,0 +1,8 @@
+[Details]
+  ID = "io.regexfileextractor.desktop"
+  Name = "Regex File Extractor"
+  Version = "1.1.0"
+  Build = 2
+
+[Migrations]
+  fyneDo = true

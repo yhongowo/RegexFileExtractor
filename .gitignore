@@ -1,0 +1,7 @@
+/dist/
+/.cache/
+*.log
+.DS_Store
+*.syso
+*.test
+*.pprof
