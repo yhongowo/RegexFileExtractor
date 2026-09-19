@@ -41,9 +41,13 @@ func TestResizeAndVirtualization(t *testing.T) {
 	near := func(a, b float32) bool { return a >= b-1 && a <= b+1 }
 	var narrowWidth float32
 	for _, size := range []fyne.Size{fyne.NewSize(800, 600), fyne.NewSize(600, 500), fyne.NewSize(640, 520), fyne.NewSize(700, 560), fyne.NewSize(1200, 760), fyne.NewSize(1000, 720)} {
-		c.Window.Resize(size)
+		// The test driver allows sizes below the native window minimum.
+		c.Window.Resize(size.Max(c.Window.Content().MinSize()))
 		view := c.settings
 		right := view.panels[1]
+		if right.Size().Width != extractionSettingsWidth {
+			t.Fatal("extraction settings width changed during resize")
+		}
 		if right.Position().X <= 0 || right.Position().Y != 0 {
 			t.Fatal("settings must remain side by side")
 		}

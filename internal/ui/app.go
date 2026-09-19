@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"path/filepath"
 	"strings"
 
 	"regexfileextractor/internal/config"
@@ -81,11 +82,19 @@ func (c *Controller) build() {
 	c.source = widget.NewEntry()
 	c.source.SetPlaceHolder(c.tr("sourceHint"))
 	c.source.SetText(c.cfg.Source)
-	c.source.OnChanged = func(value string) { c.cfg.Source = value; c.invalidate() }
+	c.source.OnChanged = func(value string) {
+		c.cfg.Source = value
+		c.refreshTargetPlaceholder()
+		c.invalidate()
+	}
 	c.target = widget.NewEntry()
-	c.target.SetPlaceHolder(c.tr("targetHint"))
+	c.refreshTargetPlaceholder()
 	c.target.SetText(c.cfg.Destination)
-	c.target.OnChanged = func(value string) { c.cfg.Destination = value; c.invalidate() }
+	c.target.OnChanged = func(value string) {
+		c.cfg.Destination = value
+		c.refreshTargetPlaceholder()
+		c.invalidate()
+	}
 	browseSource := newLabeledIconButton(c.tr("source")+" · "+c.tr("browse"), folderIcon, func() { c.browse(c.source) })
 	browseTarget := newLabeledIconButton(c.tr("target")+" · "+c.tr("browse"), folderIcon, func() { c.browse(c.target) })
 	c.rule = widget.NewSelect(c.ruleNames(), nil)
@@ -121,15 +130,15 @@ func (c *Controller) build() {
 		cardSurface(container.NewPadded(container.NewBorder(nil, nil, nil, outlineIconButton(copyPattern), c.pattern))),
 	))
 
-	layoutSelect := widget.NewRadioGroup([]string{"auto", "group", "flat"}, nil)
+	layoutSelect := newEqualWidthRadioGroup([]string{"Auto", "Group", "Flat"})
 	layoutSelect.Horizontal = true
 	layoutSelect.Required = true
-	layoutSelect.SetSelected(string(c.cfg.Layout))
+	layoutSelect.SetSelected(map[core.Layout]string{core.Auto: "Auto", core.Group: "Group", core.Flat: "Flat"}[c.cfg.Layout])
 	layoutHint := widget.NewLabel(c.tr(string(c.cfg.Layout) + "Hint"))
 	layoutHint.Wrapping = fyne.TextWrapWord
 	layoutSelect.OnChanged = func(value string) {
-		c.cfg.Layout = core.Layout(value)
-		layoutHint.SetText(c.tr(value + "Hint"))
+		c.cfg.Layout = core.Layout(strings.ToLower(value))
+		layoutHint.SetText(c.tr(string(c.cfg.Layout) + "Hint"))
 		if c.settings != nil {
 			c.settings.invalidateMeasure()
 			c.settings.Refresh()
@@ -202,6 +211,28 @@ func (c *Controller) build() {
 	body := container.New(workspaceLayout{gap: 8}, c.settings, results)
 	c.Window.SetContent(container.NewPadded(container.NewBorder(header, foot, nil, nil, body)))
 	c.refreshPlan()
+}
+
+// effectiveDestination resolves the default without changing the entry or saved preference.
+func (c *Controller) effectiveDestination() string {
+	if strings.TrimSpace(c.cfg.Destination) != "" {
+		return c.cfg.Destination
+	}
+	if strings.TrimSpace(c.cfg.Source) == "" {
+		return ""
+	}
+	return filepath.Join(c.cfg.Source, "extracted")
+}
+
+func (c *Controller) refreshTargetPlaceholder() {
+	if strings.TrimSpace(c.cfg.Destination) != "" {
+		return
+	}
+	hint := c.effectiveDestination()
+	if hint == "" {
+		hint = c.tr("targetHint")
+	}
+	c.target.SetPlaceHolder(hint)
 }
 
 func (c *Controller) setLanguage(value string) {
@@ -408,7 +439,7 @@ func (c *Controller) startScan() {
 	c.invalidate()
 	c.status.SetText(fmt.Sprintf(c.tr("scanProgress"), 0, 0))
 	ctx := c.begin(true)
-	opts := core.ScanOptions{Source: c.cfg.Source, Exclude: c.cfg.Destination, Rule: rule}
+	opts := core.ScanOptions{Source: c.cfg.Source, Exclude: c.effectiveDestination(), Rule: rule}
 	go func() {
 		result, err := core.Scan(ctx, opts, func(p core.ScanProgress) {
 			// Scan already throttles progress updates. Do not make filesystem work
@@ -445,12 +476,12 @@ func (c *Controller) confirmCopy() {
 	if c.busy || len(c.plan) == 0 {
 		return
 	}
-	if strings.TrimSpace(c.cfg.Destination) == "" {
+	if c.effectiveDestination() == "" {
 		c.fail(errors.New(c.tr("chooseTarget")))
 		return
 	}
 	if c.cfg.Conflict == core.Overwrite {
-		c.confirm(c.tr("overwriteTitle"), fmt.Sprintf(c.tr("overwriteBody"), len(c.plan), c.cfg.Destination), c.tr("copy"), func(ok bool) {
+		c.confirm(c.tr("overwriteTitle"), fmt.Sprintf(c.tr("overwriteBody"), len(c.plan), c.effectiveDestination()), c.tr("copy"), func(ok bool) {
 			if ok {
 				c.startCopy()
 			}
@@ -467,7 +498,7 @@ func (c *Controller) startCopy() {
 		return
 	}
 	entries := c.plan // Immutable while the copy task locks selection and settings.
-	target, conflict := c.cfg.Destination, c.cfg.Conflict
+	target, conflict := c.effectiveDestination(), c.cfg.Conflict
 	c.details = ""
 	ctx := c.begin(false)
 	c.status.SetText(fmt.Sprintf(c.tr("copyProgress"), 0, len(entries), 0, 0, 0))

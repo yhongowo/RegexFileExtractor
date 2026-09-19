@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"image/png"
 	"os"
@@ -225,5 +226,80 @@ func TestRenderScreenshots(t *testing.T) {
 			}
 			file.Close()
 		}
+	}
+}
+
+func TestDefaultOutputPlaceholder(t *testing.T) {
+	c := testController(t)
+	if c.target.PlaceHolder != c.tr("targetHint") || c.effectiveDestination() != "" {
+		t.Fatal("empty source should retain the generic output hint")
+	}
+	source := t.TempDir()
+	c.source.SetText(source)
+	assertDefault := func() {
+		t.Helper()
+		want := filepath.Join(c.source.Text, "extracted")
+		if c.target.Text != "" || c.cfg.Destination != "" || c.target.PlaceHolder != want || c.effectiveDestination() != want {
+			t.Fatalf("default output mismatch: value=%q config=%q placeholder=%q resolved=%q", c.target.Text, c.cfg.Destination, c.target.PlaceHolder, c.effectiveDestination())
+		}
+	}
+	assertDefault()
+	c.source.SetText(filepath.Join(source, "next"))
+	assertDefault()
+	custom := filepath.Join(source, "custom")
+	c.target.SetText(custom) // Browse also applies its selection through SetText.
+	c.source.SetText(source)
+	if c.target.Text != custom || c.effectiveDestination() != custom {
+		t.Fatal("source change replaced custom output")
+	}
+	c.target.SetText("")
+	assertDefault()
+	c.setLanguage("en")
+	assertDefault()
+	stored, err := config.Load(c.configPath)
+	if err != nil || stored.Destination != "" {
+		t.Fatalf("default was saved as an explicit destination: %+v, %v", stored, err)
+	}
+	c.cfg = stored
+	c.build()
+	assertDefault()
+	c.source.SetText("")
+	if c.target.PlaceHolder != c.tr("targetHint") || c.effectiveDestination() != "" {
+		t.Fatal("clearing source retained a stale default")
+	}
+}
+
+func TestDefaultOutputCopyAndRescan(t *testing.T) {
+	c := testController(t)
+	source := t.TempDir()
+	c.source.SetText(source)
+	name := "X01Y01.csv"
+	if err := os.WriteFile(filepath.Join(source, name), []byte("sample"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rule := core.Rule{ID: "test", Name: "test", Pattern: `.*\.csv`}
+	opts := core.ScanOptions{Source: c.cfg.Source, Exclude: c.effectiveDestination(), Rule: rule}
+	result, err := core.Scan(context.Background(), opts, nil)
+	if err != nil || len(result.Files) != 1 {
+		t.Fatalf("scan: %+v, %v", result, err)
+	}
+	plan, err := core.Plan(result.Files, core.Flat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := core.Copy(context.Background(), c.effectiveDestination(), plan, core.Skip, nil)
+	if err != nil || copied.Copied != 1 {
+		t.Fatalf("copy: %+v, %v", copied, err)
+	}
+	data, err := os.ReadFile(filepath.Join(source, "extracted", name))
+	if err != nil || string(data) != "sample" {
+		t.Fatalf("default output missing or incorrect: %q, %v", data, err)
+	}
+	result, err = core.Scan(context.Background(), opts, nil)
+	if err != nil || len(result.Files) != 1 {
+		t.Fatalf("rescan included extracted output: %+v, %v", result, err)
+	}
+	if c.target.Text != "" || c.cfg.Destination != "" {
+		t.Fatal("copy populated the output value")
 	}
 }

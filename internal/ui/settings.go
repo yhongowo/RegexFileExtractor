@@ -163,6 +163,54 @@ func (emptyStateLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	}
 }
 
+// Keep native radio behavior and styling. Each option gets an equal-width
+// column, with content aligned from the leading to the trailing edge.
+type equalWidthRadioGroup struct {
+	widget.RadioGroup
+}
+
+func newEqualWidthRadioGroup(options []string) *equalWidthRadioGroup {
+	r := &equalWidthRadioGroup{}
+	r.Options = options
+	r.Horizontal = true
+	r.ExtendBaseWidget(r)
+	return r
+}
+
+func (r *equalWidthRadioGroup) CreateRenderer() fyne.WidgetRenderer {
+	return &equalWidthRadioRenderer{WidgetRenderer: r.RadioGroup.CreateRenderer(), radio: r}
+}
+
+type equalWidthRadioRenderer struct {
+	fyne.WidgetRenderer
+	radio *equalWidthRadioGroup
+}
+
+func (r *equalWidthRadioRenderer) Layout(size fyne.Size) {
+	items := r.Objects()
+	if len(items) == 0 {
+		return
+	}
+	width := size.Width / float32(len(items))
+	for i, item := range items {
+		itemWidth := min(width, item.MinSize().Width)
+		alignment := float32(0)
+		if len(items) > 1 {
+			alignment = float32(i) / float32(len(items)-1)
+		}
+		x := float32(i)*width + (width-itemWidth)*alignment
+		item.Move(fyne.NewPos(x, 0))
+		item.Resize(fyne.NewSize(itemWidth, size.Height))
+	}
+}
+
+func (r *equalWidthRadioRenderer) Refresh() {
+	r.WidgetRenderer.Refresh()
+	r.Layout(r.radio.Size())
+}
+
+const extractionSettingsWidth float32 = 230
+
 // The settings always stay in two columns. Scrolling only handles extra height
 // from warnings or an unusually short window.
 type settingsView struct {
@@ -197,7 +245,7 @@ func (*settingsExtent) Layout([]fyne.CanvasObject, fyne.Size)   {}
 
 type settingsRenderer struct{ view *settingsView }
 
-func (r *settingsRenderer) MinSize() fyne.Size           { return fyne.NewSize(580, 200) }
+func (r *settingsRenderer) MinSize() fyne.Size           { return fyne.NewSize(660, 200) }
 func (r *settingsRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.view.scroll} }
 func (r *settingsRenderer) Destroy()                     {}
 func (r *settingsRenderer) Refresh()                     { r.Layout(r.view.Size()); canvas.Refresh(r.view) }
@@ -205,8 +253,8 @@ func (r *settingsRenderer) Layout(size fyne.Size) {
 	v := r.view
 	width := max(float32(0), size.Width)
 	gap := float32(8)
-	leftWidth := (width - gap) * .62
-	panelWidths := [2]float32{leftWidth, width - gap - leftWidth}
+	leftWidth := max(float32(0), width-gap-extractionSettingsWidth)
+	panelWidths := [2]float32{leftWidth, extractionSettingsWidth}
 	if !v.measured || v.measureWidth != panelWidths {
 		for i, panel := range v.panels {
 			// Keep the previous allocated height while measuring width-dependent
