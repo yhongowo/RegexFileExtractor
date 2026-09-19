@@ -113,9 +113,15 @@ func TestScanCancellationAndLinks(t *testing.T) {
 		}
 	}
 	opts := ScanOptions{Source: root, Rule: Rule{Name: "csv", Pattern: `.*\.csv`}}
-	result, err := Scan(context.Background(), opts, nil)
+	var progresses []ScanProgress
+	result, err := Scan(context.Background(), opts, func(progress ScanProgress) {
+		progresses = append(progresses, progress)
+	})
 	if err != nil || len(result.Files) != 1 {
 		t.Fatalf("followed a link: %+v, %v", result, err)
+	}
+	if len(progresses) != 1 || progresses[0].Visited != 1 || progresses[0].Matched != 1 {
+		t.Fatalf("unexpected progress updates: %+v", progresses)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -172,7 +178,7 @@ func TestLayoutNamespacesAndCase(t *testing.T) {
 	if err != nil || filepath.ToSlash(plan[0].Relative) != "files/file_001.csv" {
 		t.Fatalf("dotfile: %v %v", plan, err)
 	}
-	for _, name := range []string{"../bad.csv", "NUL.txt", "a\\b.csv", "a.", "CON", "bad:name.csv"} {
+	for _, name := range []string{"../bad.csv", "NUL.txt", "nul.txt", "com1.log", "COM¹.txt", "lpt².log", "LPT³", "a\\b.csv", "a.", "CON", "bad:name.csv"} {
 		if _, err := Plan([]File{{Path: "a", Name: name}}, Flat); err == nil {
 			t.Fatalf("accepted %q", name)
 		}
@@ -186,22 +192,28 @@ func TestCopySkipAndOverwrite(t *testing.T) {
 			a := put(t, src, "a/X.csv", "first")
 			b := put(t, src, "b/X.csv", "second")
 			plan, _ := Plan([]File{b, a}, Flat)
+			if err := os.WriteFile(filepath.Join(dst, "X_001.csv"), []byte("old"), 0644); err != nil {
+				t.Fatal(err)
+			}
 			result, err := Copy(context.Background(), dst, plan, policy, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "first"
+			want := "old"
 			copied, skipped := 1, 1
 			if policy == Overwrite {
-				want = "second"
+				want = "first"
 				copied = 2
 				skipped = 0
 			}
 			if result.Copied != copied || result.Skipped != skipped || result.Failed != 0 {
 				t.Fatalf("%+v", result)
 			}
-			if got := read(t, filepath.Join(dst, "X.csv")); got != want {
+			if got := read(t, filepath.Join(dst, "X_001.csv")); got != want {
 				t.Fatalf("got %s want %s", got, want)
+			}
+			if got := read(t, filepath.Join(dst, "X_002.csv")); got != "second" {
+				t.Fatalf("got %s want second", got)
 			}
 			if read(t, a.Path) != "first" || read(t, b.Path) != "second" {
 				t.Fatal("source modified")

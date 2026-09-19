@@ -73,7 +73,7 @@ func (r *resultRow) update(id int) {
 // Header and rows use the same geometry and reserve space for the vertical bar.
 type resultColumns struct{}
 
-func (resultColumns) MinSize([]fyne.CanvasObject) fyne.Size { return fyne.NewSize(600, 32) }
+func (resultColumns) MinSize([]fyne.CanvasObject) fyne.Size { return fyne.NewSize(520, 32) }
 func (resultColumns) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	if len(objects) != 6 {
 		return
@@ -94,6 +94,20 @@ func resultColumnWidths(width float32) [6]float32 {
 	return [6]float32{check, name, path, size, rule, remaining - name - path - rule}
 }
 
+type selectionHeaderCheck struct {
+	widget.Check
+	label string
+}
+
+func newSelectionHeaderCheck(label string, changed func(bool)) *selectionHeaderCheck {
+	check := &selectionHeaderCheck{label: label}
+	check.OnChanged = changed
+	check.ExtendBaseWidget(check)
+	return check
+}
+
+func (c *selectionHeaderCheck) AccessibilityLabel() string { return c.label }
+
 func (c *Controller) makeResults() (*widget.List, fyne.CanvasObject) {
 	list := widget.NewList(func() int { return len(c.files) }, func() fyne.CanvasObject { return newResultRow(c) }, func(id widget.ListItemID, obj fyne.CanvasObject) { obj.(*resultRow).update(id) })
 	list.OnSelected = func(id widget.ListItemID) {
@@ -104,13 +118,10 @@ func (c *Controller) makeResults() (*widget.List, fyne.CanvasObject) {
 		c.showText(c.tr("fileDetails"), fmt.Sprintf("%s: %s\n%s: %s\n%s: %s (%d B)\n%s: %s\n%s: %s", c.tr("filename"), f.Name, c.tr("path"), f.Path, c.tr("size"), formatSize(f.Size), f.Size, c.tr("matchedRule"), f.Rule, c.tr("outputPath"), c.outputs[f.Path]))
 		list.UnselectAll()
 	}
-	var headers []fyne.CanvasObject
-	for _, key := range []string{"", "filename", "path", "size", "matchedRule", "outputPath"} {
-		text := ""
-		if key != "" {
-			text = c.tr(key)
-		}
-		label := widget.NewLabel(text)
+	c.selectAllCheck = newSelectionHeaderCheck(c.tr("all"), func(checked bool) { c.selectAll(checked) })
+	headers := []fyne.CanvasObject{c.selectAllCheck}
+	for _, key := range []string{"filename", "path", "size", "matchedRule", "outputPath"} {
+		label := widget.NewLabel(c.tr(key))
 		label.Truncation = fyne.TextTruncateEllipsis
 		headers = append(headers, label)
 	}

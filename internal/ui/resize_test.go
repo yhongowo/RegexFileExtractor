@@ -24,25 +24,45 @@ func TestResizeAndVirtualization(t *testing.T) {
 	c.refreshPlan()
 	row := newResultRow(c)
 	row.update(0)
+	iconCommands := 0
+	for _, control := range c.controls {
+		if button, ok := control.(*labeledIconButton); ok {
+			if button.Text != "" || button.AccessibilityLabel() == "" {
+				t.Fatal("icon commands must retain an accessible name")
+			}
+			if button != c.languageButton {
+				iconCommands++
+			}
+		}
+	}
+	if iconCommands != 6 {
+		t.Fatalf("found %d icon commands, want 6", iconCommands)
+	}
+	near := func(a, b float32) bool { return a >= b-1 && a <= b+1 }
 	var narrowWidth float32
-	for _, size := range []fyne.Size{fyne.NewSize(1280, 820), fyne.NewSize(800, 620), fyne.NewSize(1600, 960), fyne.NewSize(1000, 720)} {
+	for _, size := range []fyne.Size{fyne.NewSize(800, 600), fyne.NewSize(600, 500), fyne.NewSize(640, 520), fyne.NewSize(700, 560), fyne.NewSize(1200, 760), fyne.NewSize(1000, 720)} {
 		c.Window.Resize(size)
 		view := c.settings
 		right := view.panels[1]
-		if view.Size().Width-12 < 940 {
-			if right.Position().X != 0 || right.Position().Y <= 0 {
-				t.Fatal("narrow settings did not stack")
-			}
-		} else if right.Position().X <= 0 || right.Position().Y != 0 {
-			t.Fatal("wide settings did not return to two columns")
+		if right.Position().X <= 0 || right.Position().Y != 0 {
+			t.Fatal("settings must remain side by side")
 		}
-		if right.Position().Y+right.Size().Height > view.extent.size.Height+1 {
-			t.Fatal("lower settings outside scroll extent")
+		if right.Size().Height > view.extent.size.Height+1 {
+			t.Fatal("settings outside scroll extent")
 		}
 		for _, p := range view.panels {
 			if p.Position().X+p.Size().Width > view.Size().Width {
 				t.Fatal("settings overflow viewport")
 			}
+		}
+		leftPos := c.app.Driver().AbsolutePositionForObject(view.panels[0])
+		rightPos := c.app.Driver().AbsolutePositionForObject(view.panels[1])
+		resultPos := c.app.Driver().AbsolutePositionForObject(c.resultsCard)
+		if !near(leftPos.X, resultPos.X) || !near(rightPos.X+right.Size().Width, resultPos.X+c.resultsCard.Size().Width) {
+			t.Fatalf("cards not horizontally aligned at %.0f width: left=%v right=%v results=%v", size.Width, leftPos, rightPos, resultPos)
+		}
+		if !near(resultPos.Y, leftPos.Y+view.panels[0].Size().Height+8) {
+			t.Fatalf("card row gap inconsistent at %.0f width: settings=%v size=%v results=%v", size.Width, leftPos, view.panels[0].Size(), resultPos)
 		}
 		if c.resultList.Size().Height < 50 {
 			t.Fatal("results collapsed during resize")
@@ -52,10 +72,13 @@ func TestResizeAndVirtualization(t *testing.T) {
 		if end > row.Size().Width || row.labels[4].Size().Width < 60 {
 			t.Fatal("result columns do not fit")
 		}
-		if size.Width == 800 {
+		if size.Width == 600 {
 			narrowWidth = row.labels[1].Size().Width
+			if c.rule.Size().Width < 90 {
+				t.Fatal("rule selector lost space at 600 width")
+			}
 		}
-		if size.Width == 1600 && row.labels[1].Size().Width <= narrowWidth {
+		if size.Width == 1200 && row.labels[1].Size().Width <= narrowWidth {
 			t.Fatal("path column did not expand")
 		}
 	}
@@ -74,6 +97,9 @@ func TestRecycledRowChangesOnlyItsCurrentSelection(t *testing.T) {
 	if !c.selected[0] || c.selected[1] {
 		t.Fatal("recycled checkbox changed the wrong file")
 	}
+	if c.selectAllCheck.Checked {
+		t.Fatal("header checkbox did not reflect the row selection")
+	}
 	plan := &c.plan[0]
 	row.update(1)
 	if &c.plan[0] != plan {
@@ -84,16 +110,39 @@ func TestRecycledRowChangesOnlyItsCurrentSelection(t *testing.T) {
 	}
 }
 
-func TestThemeUsesDefaultFontsAndCompactSizes(t *testing.T) {
+func TestLabeledIconButtonActivatesWithoutVisibleText(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	pressed := 0
+	button := newLabeledIconButton("Browse source folder", folderIcon, func() { pressed++ })
+	if button.Text != "" || button.AccessibilityLabel() != "Browse source folder" {
+		t.Fatal("icon button lost its accessible action name")
+	}
+	test.Tap(button)
+	if pressed != 1 {
+		t.Fatal("icon button did not activate")
+	}
+}
+
+func TestThemeUsesWindowsUIFontAndCompactSizes(t *testing.T) {
 	custom, defaults := Theme(), theme.DefaultTheme()
 	for _, style := range []fyne.TextStyle{{}, {Bold: true}, {Monospace: true}, {Symbol: true}} {
-		if custom.Font(style).Name() != defaults.Font(style).Name() {
-			t.Fatalf("font for %+v differs from the Fyne default", style)
+		want := defaults.Font(style)
+		if !style.Monospace && !style.Symbol {
+			if system := uiFont(style.Bold); system != nil {
+				want = system
+			}
+		}
+		if custom.Font(style).Name() != want.Name() {
+			t.Fatalf("font for %+v is %q, want %q", style, custom.Font(style).Name(), want.Name())
 		}
 	}
 	for _, name := range []fyne.ThemeSizeName{theme.SizeNamePadding, theme.SizeNameText, theme.SizeNameInlineIcon} {
 		if custom.Size(name) >= 20 {
 			t.Fatalf("theme size %s is not compact", name)
 		}
+	}
+	if custom.Size(theme.SizeNameText) < 12 || custom.Size(theme.SizeNameCaptionText) < 12 {
+		t.Fatal("compact typography dropped below the legibility floor")
 	}
 }

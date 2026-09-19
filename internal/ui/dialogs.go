@@ -7,17 +7,27 @@ import (
 	"os"
 	"strings"
 
+	"regexfileextractor/internal/config"
+	"regexfileextractor/internal/core"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	"regexfileextractor/internal/config"
-	"regexfileextractor/internal/core"
 )
 
 func (c *Controller) browse(entry *widget.Entry) {
+	if showNativeFolderPicker(c.Window, entry.Text, func(path string, err error) {
+		if err != nil {
+			c.fail(err)
+		} else if path != "" {
+			entry.SetText(path)
+		}
+	}) {
+		return
+	}
 	d := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
 		if err != nil {
 			c.fail(err)
@@ -34,8 +44,10 @@ func (c *Controller) browse(entry *widget.Entry) {
 			d.SetLocation(uri)
 		}
 	}
-	d.Resize(fyne.NewSize(800, 520))
 	d.Show()
+	// FileDialog creates its internal popup in Show. Resizing it earlier makes
+	// Fyne dereference the not-yet-created popup and crashes the application.
+	d.Resize(fyne.NewSize(800, 520))
 }
 
 func (c *Controller) editRule(edit bool) {
@@ -69,7 +81,7 @@ func (c *Controller) editRule(edit bool) {
 			return fmt.Errorf("%s", c.tr("nameRequired"))
 		}
 		for _, rule := range c.cfg.Rules {
-			if rule.ID != original.ID && strings.EqualFold(strings.TrimSpace(name.Text), rule.Name) {
+			if rule.ID != original.ID && strings.EqualFold(strings.TrimSpace(name.Text), strings.TrimSpace(rule.Name)) {
 				return fmt.Errorf("%s", c.tr("duplicateName"))
 			}
 		}
@@ -192,7 +204,7 @@ func (c *Controller) showText(title, text string) {
 	view.Wrapping = fyne.TextWrapWord
 	copy := widget.NewButtonWithIcon(c.tr("copyText"), theme.ContentCopyIcon(), func() { c.Window.Clipboard().SetContent(text) })
 	d := dialog.NewCustom(title, c.tr("ok"), container.NewBorder(nil, copy, nil, nil, container.NewVScroll(view)), c.Window)
-	d.Resize(fyne.NewSize(740, 420))
+	d.Resize(fyne.NewSize(300, 240))
 	d.Show()
 }
 func (c *Controller) about() {
@@ -203,7 +215,7 @@ func (c *Controller) about() {
 	content := widget.NewLabel(fmt.Sprintf(c.tr("aboutText"), c.configPath))
 	content.Wrapping = fyne.TextWrapWord
 	d := dialog.NewCustom(c.tr("about"), c.tr("ok"), content, c.Window)
-	d.Resize(fyne.NewSize(610, 360))
+	d.Resize(fyne.NewSize(300, 200))
 	d.Show()
 }
 

@@ -15,7 +15,7 @@ func TestRoundTripAndReplacement(t *testing.T) {
 	}
 	cfg.Source = `C:\测试数据`
 	cfg.Language = "en"
-	cfg.SelectedRule = "logs"
+	cfg.SelectedRule = "datalog"
 	if err := Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +67,7 @@ func TestValidationBeforeSaving(t *testing.T) {
 	for _, mutate := range []func(*Config){
 		func(c *Config) { c.Rules[0].Pattern = "[" }, func(c *Config) { c.SelectedRule = "missing" },
 		func(c *Config) { c.Rules[1].Name = c.Rules[0].Name }, func(c *Config) { c.Rules[1].ID = c.Rules[0].ID },
+		func(c *Config) { c.Rules[0].Name, c.Rules[1].Name = "s", "ſ" },
 		func(c *Config) { c.Layout = "unknown" }, func(c *Config) { c.Version = 2 },
 	} {
 		cfg = Default()

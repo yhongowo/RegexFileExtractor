@@ -25,6 +25,21 @@ func BenchmarkWindowResize(b *testing.B) {
 	}
 }
 
+// Resizing height while keeping width is common when snapping or dragging a
+// window edge. The settings panel should not remeasure wrapped content then.
+func BenchmarkWindowVerticalResize(b *testing.B) {
+	a := test.NewApp()
+	a.Settings().SetTheme(Theme())
+	c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
+	c.Window.Show()
+	defer a.Quit()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.Window.Resize(fyne.NewSize(1000, float32(600+i%180)))
+	}
+}
+
 func BenchmarkPreviewSelection(b *testing.B) {
 	a := test.NewApp()
 	a.Settings().SetTheme(Theme())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"strings"
 
 	"regexfileextractor/internal/config"
@@ -13,71 +14,69 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
 type Controller struct {
-	app                                        fyne.App
-	Window                                     fyne.Window
-	cfg                                        config.Config
-	configPath                                 string
-	loadErr                                    error
-	files                                      []core.File
-	selected                                   []bool
-	planScratch                                []core.File
-	plan                                       []core.Entry
-	outputs                                    map[string]string
-	busy                                       bool
-	cancel                                     context.CancelFunc
-	closeAfterCancel                           bool
-	details                                    string
-	source, target                             *widget.Entry
-	rule                                       *widget.Select
-	pattern, status, selection, empty, warning *widget.Label
-	resultList                                 *widget.List
-	settings                                   *settingsView
-	body                                       *container.Split
-	progress                                   *widget.ProgressBar
-	activity                                   *widget.ProgressBarInfinite
-	scan, copy, cancelButton, detailButton     *widget.Button
-	controls                                   []fyne.Disableable
+	app                                    fyne.App
+	Window                                 fyne.Window
+	cfg                                    config.Config
+	configPath                             string
+	loadErr                                error
+	files                                  []core.File
+	selected                               []bool
+	planScratch                            []core.File
+	plan                                   []core.Entry
+	outputs                                map[string]string
+	busy                                   bool
+	cancel                                 context.CancelFunc
+	closeAfterCancel                       bool
+	details                                string
+	source, target                         *widget.Entry
+	rule                                   *widget.Select
+	pattern, status, selection, warning    *widget.Label
+	emptyView                              fyne.CanvasObject
+	resultList                             *widget.List
+	resultsCard                            fyne.CanvasObject
+	selectAllCheck                         *selectionHeaderCheck
+	settings                               *settingsView
+	languageButton                         *labeledIconButton
+	progress                               *widget.ProgressBar
+	activity                               *widget.ProgressBarInfinite
+	scan, copy, cancelButton, detailButton *widget.Button
+	controls                               []fyne.Disableable
 }
 
 func New(a fyne.App, cfg config.Config, path string, loadErr error) *Controller {
 	c := &Controller{app: a, cfg: cfg, configPath: path, loadErr: loadErr, outputs: map[string]string{}}
 	c.Window = a.NewWindow("Regex File Extractor")
-	c.Window.Resize(fyne.NewSize(700, 500))
 	c.Window.SetCloseIntercept(c.close)
 	c.build()
+	c.Window.Resize(fyne.NewSize(800, 600))
 	return c
 }
 
 func (c *Controller) build() {
 	c.controls = nil
-	title := canvas.NewText("Regex File Extractor", theme.ForegroundColor())
-	title.TextSize = 18
-	language := widget.NewSelect([]string{"简体中文", "English"}, nil)
-	if c.cfg.Language == "en" {
-		language.SetSelected("English")
-	} else {
-		language.SetSelected("简体中文")
-	}
-	language.OnChanged = func(value string) {
-		before := c.cfg.Language
-		c.cfg.Language = "zh"
-		if value == "English" {
-			c.cfg.Language = "en"
+	c.languageButton = newLabeledIconButton(c.tr("switchLanguage"), languageIcon, func() {
+		if c.cfg.Language == "zh" {
+			c.setLanguage("en")
+		} else {
+			c.setLanguage("zh")
 		}
-		if !c.persist() {
-			c.cfg.Language = before
-		}
-		c.build()
-	}
-	about := widget.NewButtonWithIcon(c.tr("about"), theme.InfoIcon(), c.about)
-	header := container.NewBorder(nil, nil, nil, container.NewCenter(container.NewHBox(language, about)), container.NewVBox(title))
-	c.controls = append(c.controls, language)
+	})
+	about := newLabeledIconButton(c.tr("about"), infoIcon, c.about)
+	workspaceTitle := canvas.NewText(c.tr("workspace"), color.NRGBA{R: 75, G: 85, B: 99, A: 255})
+	workspaceTitle.TextSize = 12
+	workspaceTitle.TextStyle = fyne.TextStyle{Bold: true}
+	header := container.NewVBox(
+		container.NewBorder(nil, nil, container.NewPadded(container.NewCenter(container.NewHBox(widget.NewIcon(fileIcon), workspaceTitle))), gapRow(8,
+			outlineIconButton(c.languageButton),
+			outlineIconButton(about),
+		), nil),
+		widget.NewSeparator(),
+	)
+	c.controls = append(c.controls, c.languageButton)
 
 	c.source = widget.NewEntry()
 	c.source.SetPlaceHolder(c.tr("sourceHint"))
@@ -87,8 +86,8 @@ func (c *Controller) build() {
 	c.target.SetPlaceHolder(c.tr("targetHint"))
 	c.target.SetText(c.cfg.Destination)
 	c.target.OnChanged = func(value string) { c.cfg.Destination = value; c.invalidate() }
-	browseSource := widget.NewButtonWithIcon(c.tr("browse"), theme.FolderOpenIcon(), func() { c.browse(c.source) })
-	browseTarget := widget.NewButtonWithIcon(c.tr("browse"), theme.FolderOpenIcon(), func() { c.browse(c.target) })
+	browseSource := newLabeledIconButton(c.tr("source")+" · "+c.tr("browse"), folderIcon, func() { c.browse(c.source) })
+	browseTarget := newLabeledIconButton(c.tr("target")+" · "+c.tr("browse"), folderIcon, func() { c.browse(c.target) })
 	c.rule = widget.NewSelect(c.ruleNames(), nil)
 	if rule, ok := c.currentRule(); ok {
 		c.rule.SetSelected(rule.Name)
@@ -108,17 +107,19 @@ func (c *Controller) build() {
 	c.pattern.TextStyle.Monospace = true
 	c.pattern.Truncation = fyne.TextTruncateEllipsis
 	c.refreshPattern()
-	add := widget.NewButtonWithIcon(c.tr("add"), theme.ContentAddIcon(), func() { c.editRule(false) })
-	edit := widget.NewButtonWithIcon(c.tr("edit"), theme.DocumentCreateIcon(), func() { c.editRule(true) })
-	remove := widget.NewButtonWithIcon(c.tr("delete"), theme.DeleteIcon(), c.deleteRule)
-	inputForm := widget.NewForm(
-		widget.NewFormItem(c.tr("source"), container.NewBorder(nil, nil, nil, browseSource, c.source)),
-		widget.NewFormItem(c.tr("target"), container.NewBorder(nil, nil, nil, browseTarget, c.target)),
-		widget.NewFormItem(c.tr("rule"), container.NewBorder(nil, nil, nil, container.NewHBox(add, edit, remove), c.rule)),
-	)
-	ruleHint := widget.NewLabel(c.tr("patternHint"))
-	ruleHint.Wrapping = fyne.TextWrapWord
-	left := settingsPanel(c.tr("inputs"), container.NewVBox(inputForm, c.pattern, ruleHint))
+	copyPattern := newLabeledIconButton(c.tr("copyPattern"), copyIcon, func() {
+		c.Window.Clipboard().SetContent(c.pattern.Text)
+	})
+	add := newLabeledIconButton(c.tr("newRule"), addIcon, func() { c.editRule(false) })
+	edit := newLabeledIconButton(c.tr("editRule"), editIcon, func() { c.editRule(true) })
+	remove := newLabeledIconButton(c.tr("deleteRuleAction"), deleteIcon, c.deleteRule)
+	left := settingsPanel(c.tr("inputs"), settingsIcon, container.NewVBox(
+		fieldRow(c.tr("source"), container.NewBorder(nil, nil, nil, outlineIconButton(browseSource), c.source)),
+		fieldRow(c.tr("target"), container.NewBorder(nil, nil, nil, outlineIconButton(browseTarget), c.target)),
+		fieldRow(c.tr("rule"), container.NewBorder(nil, nil, nil, container.NewHBox(outlineIconButton(add), outlineIconButton(edit), outlineIconButton(remove)), c.rule)),
+		widget.NewLabelWithStyle(c.tr("pattern"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		cardSurface(container.NewPadded(container.NewBorder(nil, nil, nil, outlineIconButton(copyPattern), c.pattern))),
+	))
 
 	layoutSelect := widget.NewRadioGroup([]string{"auto", "group", "flat"}, nil)
 	layoutSelect.Horizontal = true
@@ -129,6 +130,10 @@ func (c *Controller) build() {
 	layoutSelect.OnChanged = func(value string) {
 		c.cfg.Layout = core.Layout(value)
 		layoutHint.SetText(c.tr(value + "Hint"))
+		if c.settings != nil {
+			c.settings.invalidateMeasure()
+			c.settings.Refresh()
+		}
 		c.refreshPlan()
 		c.persist()
 	}
@@ -143,25 +148,36 @@ func (c *Controller) build() {
 	}
 	c.warning = widget.NewLabel("")
 	c.warning.Wrapping = fyne.TextWrapWord
-	right := settingsPanel(c.tr("outputs"), container.NewVBox(
+	right := settingsPanel(c.tr("outputs"), extractionIcon, container.NewVBox(
 		widget.NewLabelWithStyle(c.tr("layout"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		layoutSelect, layoutHint, widget.NewSeparator(),
-		widget.NewForm(widget.NewFormItem(c.tr("conflict"), conflict)), c.warning,
+		fieldRow(c.tr("conflict"), conflict), c.warning,
 	))
-	c.controls = append(c.controls, c.source, c.target, browseSource, browseTarget, c.rule, add, edit, remove, layoutSelect, conflict)
+	c.controls = append(c.controls, c.source, c.target, browseSource, browseTarget, c.rule, add, edit, remove, copyPattern, layoutSelect, conflict)
 
 	c.selection = widget.NewLabel("")
-	all := widget.NewButton(c.tr("all"), func() { c.selectAll(true) })
-	none := widget.NewButton(c.tr("none"), func() { c.selectAll(false) })
-	c.controls = append(c.controls, all, none)
-	resultsHeader := container.NewBorder(nil, nil, widget.NewLabelWithStyle(c.tr("results"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), container.NewHBox(all, none), c.selection)
+	resultsTitle := container.NewHBox(sectionHeading(c.tr("results"), listIcon), c.selection)
+	resultsHeader := container.NewPadded(resultsTitle)
 	var columnHeaders fyne.CanvasObject
 	c.resultList, columnHeaders = c.makeResults()
-	c.empty = widget.NewLabel(c.tr("empty"))
-	emptyLayer := container.NewCenter(c.empty)
-	resultBody := container.NewStack(c.resultList, emptyLayer)
-	results := container.NewBorder(container.NewVBox(resultsHeader, columnHeaders), nil, nil, nil, resultBody)
-	results = container.NewPadded(results)
+	emptyTitle := canvas.NewText(c.tr("empty"), color.NRGBA{R: 31, G: 41, B: 55, A: 255})
+	emptyTitle.TextSize = 14
+	emptyTitle.TextStyle = fyne.TextStyle{Bold: true}
+	emptyTitle.Alignment = fyne.TextAlignCenter
+	emptyHint := canvas.NewText(c.tr("emptyHint"), color.NRGBA{R: 107, G: 114, B: 128, A: 255})
+	emptyHint.TextSize = 12
+	emptyHint.Alignment = fyne.TextAlignCenter
+	emptyIcon := canvas.NewImageFromResource(mutedFileIcon)
+	emptyIcon.FillMode = canvas.ImageFillContain
+	emptyIcon.SetMinSize(fyne.NewSquareSize(32))
+	c.emptyView = container.NewCenter(container.New(emptyStateLayout{}, emptyIcon, emptyTitle, emptyHint))
+	resultBody := container.NewStack(c.resultList, c.emptyView)
+	tableHeaderBackground := canvas.NewRectangle(color.NRGBA{R: 244, G: 246, B: 249, A: 255})
+	results := cardSurface(container.NewBorder(
+		container.NewVBox(resultsHeader, widget.NewSeparator(), container.NewStack(tableHeaderBackground, columnHeaders), widget.NewSeparator()),
+		nil, nil, nil, resultBody,
+	))
+	c.resultsCard = results
 
 	c.status = widget.NewLabel("")
 	c.status.Truncation = fyne.TextTruncateEllipsis
@@ -170,18 +186,35 @@ func (c *Controller) build() {
 	c.activity = widget.NewProgressBarInfinite()
 	c.activity.Stop()
 	c.activity.Hide()
-	c.scan = widget.NewButtonWithIcon(c.tr("scan"), theme.SearchIcon(), c.startScan)
-	c.copy = widget.NewButtonWithIcon(c.tr("copy"), theme.ContentCopyIcon(), c.confirmCopy)
-	c.copy.Importance = widget.HighImportance
+	c.scan = widget.NewButtonWithIcon(c.tr("scan"), searchIcon, c.startScan)
+	c.scan.Importance = widget.HighImportance
+	c.copy = widget.NewButtonWithIcon(c.tr("copy"), copyIcon, c.confirmCopy)
 	c.cancelButton = widget.NewButton(c.tr("cancel"), c.stop)
-	c.detailButton = widget.NewButton(c.tr("details"), func() { c.showText(c.tr("report"), c.details) })
-	footActions := container.NewHBox(c.detailButton, layout.NewSpacer(), c.cancelButton, c.scan, c.copy)
-	foot := container.NewVBox(widget.NewSeparator(), c.status, container.NewStack(c.progress, c.activity), footActions)
+	c.detailButton = widget.NewButtonWithIcon(c.tr("details"), fileIcon, func() { c.showText(c.tr("report"), c.details) })
+	footActions := container.NewBorder(nil, nil, sizedButton(outlineButton(c.detailButton), 112, 34),
+		gapRow(8,
+			sizedButton(outlineButton(c.cancelButton), 76, 34),
+			sizedButton(c.scan, 88, 34),
+			sizedButton(outlineButton(c.copy), 128, 34),
+		), c.status)
+	foot := container.NewVBox(container.NewStack(c.progress, c.activity), widget.NewSeparator(), footActions)
 	c.settings = newSettingsView(left, right)
-	c.body = container.NewVSplit(c.settings, results)
-	c.body.Offset = 0.50
-	c.Window.SetContent(container.NewPadded(container.NewBorder(header, foot, nil, nil, c.body)))
+	body := container.New(workspaceLayout{gap: 8}, c.settings, results)
+	c.Window.SetContent(container.NewPadded(container.NewBorder(header, foot, nil, nil, body)))
 	c.refreshPlan()
+}
+
+func (c *Controller) setLanguage(value string) {
+	if c.cfg.Language == value {
+		return
+	}
+	before := c.cfg.Language
+	c.cfg.Language = value
+	if !c.persist() {
+		c.cfg.Language = before
+		return
+	}
+	c.build()
 }
 
 func (c *Controller) currentRule() (core.Rule, bool) {
@@ -255,7 +288,21 @@ func (c *Controller) refreshPlan() {
 	if c.selection != nil {
 		setLabel(c.selection, fmt.Sprintf(c.tr("selection"), len(selected), len(c.files), formatSize(size)))
 	}
+	if c.selectAllCheck != nil {
+		allSelected := len(c.files) > 0 && len(selected) == len(c.files)
+		c.selectAllCheck.label = c.tr("all")
+		if allSelected {
+			c.selectAllCheck.label = c.tr("none")
+		}
+		if c.selectAllCheck.Checked != allSelected {
+			changed := c.selectAllCheck.OnChanged
+			c.selectAllCheck.OnChanged = nil
+			c.selectAllCheck.SetChecked(allSelected)
+			c.selectAllCheck.OnChanged = changed
+		}
+	}
 	if c.warning != nil {
+		previousWarning := c.warning.Text
 		warning := ""
 		if err != nil {
 			warning = err.Error()
@@ -266,15 +313,19 @@ func (c *Controller) refreshPlan() {
 		} else {
 			c.warning.Show()
 		}
+		if previousWarning != warning && c.settings != nil {
+			c.settings.invalidateMeasure()
+			c.settings.Refresh()
+		}
 	}
 	if c.resultList != nil {
 		c.resultList.Refresh()
 	}
-	if c.empty != nil {
+	if c.emptyView != nil {
 		if len(c.files) == 0 {
-			c.empty.Show()
+			c.emptyView.Show()
 		} else {
-			c.empty.Hide()
+			c.emptyView.Hide()
 		}
 	}
 	c.updateControls()
@@ -286,6 +337,9 @@ func (c *Controller) updateControls() {
 		} else {
 			control.Enable()
 		}
+	}
+	if c.selectAllCheck != nil {
+		setDisabled(c.selectAllCheck, c.busy || len(c.files) == 0)
 	}
 	if c.scan == nil {
 		return
@@ -307,6 +361,20 @@ func (c *Controller) updateControls() {
 		c.detailButton.Disable()
 	} else {
 		c.detailButton.Enable()
+	}
+	// Static outline SVGs retain their strokes; update only when a state flips.
+	setButtonIcon(c.scan, searchIcon, mutedSearchIcon)
+	setButtonIcon(c.copy, copyIcon, mutedCopyIcon)
+	setButtonIcon(c.detailButton, fileIcon, mutedFileIcon)
+}
+
+func setButtonIcon(button *widget.Button, enabled, disabled fyne.Resource) {
+	want := enabled
+	if button.Disabled() {
+		want = disabled
+	}
+	if button.Icon != want {
+		button.SetIcon(want)
 	}
 }
 func (c *Controller) persist() bool {
@@ -343,7 +411,9 @@ func (c *Controller) startScan() {
 	opts := core.ScanOptions{Source: c.cfg.Source, Exclude: c.cfg.Destination, Rule: rule}
 	go func() {
 		result, err := core.Scan(ctx, opts, func(p core.ScanProgress) {
-			fyne.DoAndWait(func() { setLabel(c.status, fmt.Sprintf(c.tr("scanProgress"), p.Visited, p.Matched)) })
+			// Scan already throttles progress updates. Do not make filesystem work
+			// wait for the next GUI frame; that causes visible stalls under load.
+			fyne.Do(func() { setLabel(c.status, fmt.Sprintf(c.tr("scanProgress"), p.Visited, p.Matched)) })
 		})
 		fyne.Do(func() {
 			if c.finish() {
@@ -403,7 +473,9 @@ func (c *Controller) startCopy() {
 	c.status.SetText(fmt.Sprintf(c.tr("copyProgress"), 0, len(entries), 0, 0, 0))
 	go func() {
 		result, err := core.Copy(ctx, target, entries, conflict, func(p core.CopyProgress) {
-			fyne.DoAndWait(func() {
+			// Copy progress is throttled by core.Copy. Queue it for the UI instead
+			// of blocking the copy goroutine behind rendering.
+			fyne.Do(func() {
 				c.progress.SetValue(float64(p.Done) / float64(p.Total))
 				c.status.SetText(fmt.Sprintf(c.tr("copyProgress"), p.Done, p.Total, p.Copied, p.Skipped, p.Failed))
 			})
@@ -507,7 +579,7 @@ func formatSize(size int64) string {
 		return fmt.Sprintf("%d B", size)
 	}
 	value := float64(size)
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
 	unit := 0
 	for value >= 1024 && unit < len(units)-1 {
 		value /= 1024

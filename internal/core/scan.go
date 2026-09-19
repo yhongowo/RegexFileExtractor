@@ -71,6 +71,7 @@ func Scan(ctx context.Context, opts ScanOptions, progress func(ScanProgress)) (S
 		}
 	}
 	last := time.Time{}
+	lastProgress := ScanProgress{Visited: -1, Matched: -1}
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -107,14 +108,18 @@ func Scan(ctx context.Context, opts ScanOptions, progress func(ScanProgress)) (S
 			}
 		}
 		if progress != nil && time.Since(last) >= 100*time.Millisecond {
-			progress(ScanProgress{result.Visited, len(result.Files)})
+			lastProgress = ScanProgress{result.Visited, len(result.Files)}
+			progress(lastProgress)
 			last = time.Now()
 		}
 		return nil
 	})
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
 	if progress != nil {
-		progress(ScanProgress{result.Visited, len(result.Files)})
+		finalProgress := ScanProgress{result.Visited, len(result.Files)}
+		if finalProgress != lastProgress {
+			progress(finalProgress)
+		}
 	}
 	return result, err
 }

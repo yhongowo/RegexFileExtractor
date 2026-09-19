@@ -72,15 +72,56 @@ func TestSelectionAndInvalidation(t *testing.T) {
 		t.Fatal("destination change retained stale results")
 	}
 	seedResults(c)
-	c.rule.SetSelected("Daily logs")
-	if c.cfg.SelectedRule != "logs" || len(c.files) != 0 {
+	c.rule.SetSelected("Datalog")
+	if c.cfg.SelectedRule != "datalog" || len(c.files) != 0 {
 		t.Fatal("rule selection not exclusive or results stale")
 	}
 	stored, err := config.Load(c.configPath)
-	if err != nil || stored.SelectedRule != "logs" {
+	if err != nil || stored.SelectedRule != "datalog" {
 		t.Fatal("selection not saved")
 	}
 }
+
+func TestHeaderCheckboxSelection(t *testing.T) {
+	c := testController(t)
+	if !c.selectAllCheck.Disabled() || c.selectAllCheck.Checked {
+		t.Fatal("header checkbox should be unavailable without results")
+	}
+	seedResults(c)
+	if !c.selectAllCheck.Checked || c.selectAllCheck.AccessibilityLabel() != c.tr("none") {
+		t.Fatal("header checkbox did not reflect all selected")
+	}
+	test.Tap(c.selectAllCheck)
+	if c.selectAllCheck.Checked || len(c.plan) != 0 || !c.copy.Disabled() {
+		t.Fatal("header checkbox did not clear selection")
+	}
+	test.Tap(c.selectAllCheck)
+	if !c.selectAllCheck.Checked || len(c.plan) != len(c.files) {
+		t.Fatal("header checkbox did not select all")
+	}
+	c.selected[0] = false
+	c.refreshPlan()
+	if c.selectAllCheck.Checked || c.selectAllCheck.AccessibilityLabel() != c.tr("all") {
+		t.Fatal("header checkbox did not reflect partial selection")
+	}
+	test.Tap(c.selectAllCheck)
+	if !c.selectAllCheck.Checked || len(c.plan) != len(c.files) {
+		t.Fatal("header checkbox did not select all from partial state")
+	}
+	c.begin(false)
+	if !c.selectAllCheck.Disabled() {
+		t.Fatal("header checkbox should be unavailable while busy")
+	}
+	c.finish()
+	if c.selectAllCheck.Disabled() {
+		t.Fatal("header checkbox did not recover after busy state")
+	}
+	c.invalidate()
+	if !c.selectAllCheck.Disabled() || c.selectAllCheck.Checked {
+		t.Fatal("header checkbox retained stale selection")
+	}
+}
+
 func TestLanguageCoverage(t *testing.T) {
 	c := testController(t)
 	for key, value := range translations {
@@ -89,13 +130,23 @@ func TestLanguageCoverage(t *testing.T) {
 		}
 	}
 	seedResults(c)
-	c.cfg.Language = "en"
-	c.build()
-	if c.scan.Text != "Scan files" || len(c.files) != 4 {
+	if c.languageButton.Text != "" || c.languageButton.Icon == nil {
+		t.Fatal("language control is not icon-only")
+	}
+	test.Tap(c.languageButton)
+	if c.cfg.Language != "en" || c.scan.Text != "Scan" || len(c.files) != 4 {
 		t.Fatal("language switch lost state")
 	}
+	stored, err := config.Load(c.configPath)
+	if err != nil || stored.Language != "en" {
+		t.Fatal("language switch was not saved")
+	}
+	test.Tap(c.languageButton)
+	if c.cfg.Language != "zh" || len(c.files) != 4 {
+		t.Fatal("second tap did not switch back to Chinese")
+	}
 	ctx := c.begin(false)
-	if !c.source.Disabled() || !c.copy.Disabled() || c.cancelButton.Disabled() {
+	if !c.source.Disabled() || !c.copy.Disabled() || !c.languageButton.Disabled() || c.cancelButton.Disabled() {
 		t.Fatal("busy controls inconsistent")
 	}
 	c.stop()
@@ -108,6 +159,14 @@ func TestLanguageCoverage(t *testing.T) {
 	}
 }
 
+func TestBrowseOpensFolderDialog(t *testing.T) {
+	c := testController(t)
+	c.source.SetText(t.TempDir())
+
+	// This must not panic: FileDialog's popup is only initialized by Show.
+	c.browse(c.source)
+}
+
 // Set RFE_SCREENSHOTS to an output directory to render both languages during QA.
 func TestRenderScreenshots(t *testing.T) {
 	dir := os.Getenv("RFE_SCREENSHOTS")
@@ -118,6 +177,19 @@ func TestRenderScreenshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := testController(t)
+	c.cfg.Language = "en"
+	c.build()
+	c.Window.Resize(fyne.NewSize(800, 600))
+	emptyFile, err := os.Create(filepath.Join(dir, "ui-empty-en.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(emptyFile, c.Window.Canvas().Capture()); err != nil {
+		t.Fatal(err)
+	}
+	if err := emptyFile.Close(); err != nil {
+		t.Fatal(err)
+	}
 	c.source.SetText(`D:\TestData`)
 	c.target.SetText(`D:\Extracted`)
 	seedResults(c)
@@ -125,7 +197,7 @@ func TestRenderScreenshots(t *testing.T) {
 		c.cfg.Language = lang
 		c.build()
 		c.status.SetText(c.tr("results") + ": 4")
-		c.Window.Resize(fyne.NewSize(1280, 820))
+		c.Window.Resize(fyne.NewSize(800, 600))
 		file, err := os.Create(filepath.Join(dir, "ui-"+lang+".png"))
 		if err != nil {
 			t.Fatal(err)
@@ -136,8 +208,14 @@ func TestRenderScreenshots(t *testing.T) {
 		if err := file.Close(); err != nil {
 			t.Fatal(err)
 		}
-		for _, width := range []int{800, 1600} {
-			c.Window.Resize(fyne.NewSize(float32(width), 720))
+		for _, width := range []int{600, 640, 1200} {
+			height := float32(720)
+			if width == 600 {
+				height = 500
+			} else if width == 640 {
+				height = 520
+			}
+			c.Window.Resize(fyne.NewSize(float32(width), height))
 			file, err := os.Create(filepath.Join(dir, fmt.Sprintf("ui-%s-%d.png", lang, width)))
 			if err != nil {
 				t.Fatal(err)

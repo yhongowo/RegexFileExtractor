@@ -45,6 +45,9 @@ func Plan(files []File, layout Layout) ([]Entry, error) {
 		count, next             int
 	}
 	groups := make(map[string]*groupInfo)
+	// Keep the group lookup for the output pass. Re-folding every filename here
+	// is noticeable when selection changes in a large result list.
+	fileGroups := make([]*groupInfo, len(ordered))
 	for i, f := range ordered {
 		if err := validName(f.Name); err != nil {
 			return nil, err
@@ -59,6 +62,7 @@ func Plan(files []File, layout Layout) ([]Entry, error) {
 			groups[key] = g
 		}
 		g.count++
+		fileGroups[i] = g
 	}
 	keys := make([]string, 0, len(groups))
 	for key := range groups {
@@ -103,9 +107,8 @@ func Plan(files []File, layout Layout) ([]Entry, error) {
 		}
 	}
 	plan := make([]Entry, 0, len(ordered))
-	for _, f := range ordered {
-		key := strings.ToLower(f.Name)
-		g := groups[key]
+	for i, f := range ordered {
+		g := fileGroups[i]
 		rel := g.name // Same spelling for case-only duplicate names.
 		if g.folder != "" {
 			g.next++
@@ -135,13 +138,23 @@ func validName(name string) error {
 		}
 	}
 	stem, _, _ := strings.Cut(name, ".")
-	stem = strings.ToUpper(stem)
-	reserved := stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL"
-	if len(stem) == 4 && (strings.HasPrefix(stem, "COM") || strings.HasPrefix(stem, "LPT")) && stem[3] >= '1' && stem[3] <= '9' {
+	reserved := strings.EqualFold(stem, "CON") || strings.EqualFold(stem, "PRN") || strings.EqualFold(stem, "AUX") || strings.EqualFold(stem, "NUL")
+	if isReservedPortName(stem) {
 		reserved = true
 	}
 	if reserved {
 		return fmt.Errorf("reserved Windows filename: %q", name)
 	}
 	return nil
+}
+
+func isReservedPortName(stem string) bool {
+	if len(stem) < 4 || (!strings.EqualFold(stem[:3], "COM") && !strings.EqualFold(stem[:3], "LPT")) {
+		return false
+	}
+	suffix := stem[3:]
+	if len(suffix) == 1 {
+		return suffix[0] >= '1' && suffix[0] <= '9'
+	}
+	return suffix == "¹" || suffix == "²" || suffix == "³"
 }

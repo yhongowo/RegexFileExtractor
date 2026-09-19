@@ -69,7 +69,8 @@ func (c Config) Validate() error {
 	if c.Conflict != core.Skip && c.Conflict != core.Overwrite {
 		return fmt.Errorf("invalid conflict policy")
 	}
-	ids, names := map[string]bool{}, map[string]bool{}
+	ids := map[string]bool{}
+	names := make([]string, 0, len(c.Rules))
 	for _, rule := range c.Rules {
 		if rule.ID == "" || ids[rule.ID] {
 			return fmt.Errorf("empty or duplicate rule ID")
@@ -77,11 +78,14 @@ func (c Config) Validate() error {
 		if _, err := rule.Compile(); err != nil {
 			return fmt.Errorf("%s: %w", rule.Name, err)
 		}
-		name := strings.ToLower(strings.TrimSpace(rule.Name))
-		if names[name] {
-			return fmt.Errorf("duplicate rule name: %s", rule.Name)
+		name := strings.TrimSpace(rule.Name)
+		for _, existing := range names {
+			if strings.EqualFold(name, existing) {
+				return fmt.Errorf("duplicate rule name: %s", rule.Name)
+			}
 		}
-		ids[rule.ID], names[name] = true, true
+		ids[rule.ID] = true
+		names = append(names, name)
 	}
 	if c.SelectedRule != "" && !ids[c.SelectedRule] {
 		return fmt.Errorf("selected rule does not exist")
