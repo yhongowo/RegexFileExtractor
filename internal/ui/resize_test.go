@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"regexfileextractor/internal/core"
@@ -91,6 +92,28 @@ func TestResizeAndVirtualization(t *testing.T) {
 	}
 }
 
+func TestVerticalResizeOnlyChangesResultsHeight(t *testing.T) {
+	c := testController(t)
+	var settingsHeight, resultsHeight float32
+	for i, height := range []float32{600, 720, 840, 660} {
+		c.Window.Resize(fyne.NewSize(800, height).Max(c.Window.Content().MinSize()))
+		if i == 0 {
+			settingsHeight = c.settings.Size().Height
+			resultsHeight = c.resultsCard.Size().Height
+			continue
+		}
+		if c.settings.Size().Height != settingsHeight {
+			t.Fatalf("settings height changed during vertical resize: got %.0f, want %.0f", c.settings.Size().Height, settingsHeight)
+		}
+		if height > 600 && c.resultsCard.Size().Height <= resultsHeight {
+			t.Fatalf("results did not receive added vertical space at height %.0f", height)
+		}
+	}
+	if _, ok := c.settings.CreateRenderer().Objects()[0].(*container.Scroll); ok {
+		t.Fatal("settings must not be scrollable")
+	}
+}
+
 func TestRecycledRowChangesOnlyItsCurrentSelection(t *testing.T) {
 	c := testController(t)
 	seedResults(c)
@@ -148,5 +171,55 @@ func TestThemeUsesWindowsUIFontAndCompactSizes(t *testing.T) {
 	}
 	if custom.Size(theme.SizeNameText) < 12 || custom.Size(theme.SizeNameCaptionText) < 12 {
 		t.Fatal("compact typography dropped below the legibility floor")
+	}
+}
+
+// Track expensive work below a container, not only the outer widget's resize.
+type measuredPanel struct {
+	fyne.CanvasObject
+	refreshes, measurements int
+	wrap                    bool
+}
+
+func (p *measuredPanel) Refresh() { p.refreshes++; p.CanvasObject.Refresh() }
+func (p *measuredPanel) MinSize() fyne.Size {
+	p.measurements++
+	if p.wrap && p.Size().Width < 500 {
+		return fyne.NewSize(100, 300)
+	}
+	return fyne.NewSize(100, 200)
+}
+
+func TestSettingsResizeAvoidsRecursiveRefresh(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	left := &measuredPanel{CanvasObject: container.NewWithoutLayout(), wrap: true}
+	right := &measuredPanel{CanvasObject: container.NewWithoutLayout()}
+	view := newSettingsView(left, right)
+	results := container.NewWithoutLayout()
+	objects := []fyne.CanvasObject{view, results}
+	layout := workspaceLayout{gap: 8}
+	layout.Layout(objects, fyne.NewSize(1000, 700))
+	left.refreshes, right.refreshes = 0, 0
+	right.measurements = 0
+	for _, width := range []float32{700, 1000, 680, 900} {
+		layout.Layout(objects, fyne.NewSize(width, 700))
+		wantHeight := float32(200)
+		if width-8-extractionSettingsWidth < 500 {
+			wantHeight = 300
+		}
+		if view.Size().Height != wantHeight || results.Position().Y != wantHeight+8 {
+			t.Fatalf("settings/results did not follow wrapped height at width %v: %v, %v", width, view.Size(), results.Position())
+		}
+	}
+	if left.refreshes != 0 || right.refreshes != 0 {
+		t.Fatalf("resize recursively refreshed panels: %d / %d", left.refreshes, right.refreshes)
+	}
+	if right.measurements != 0 {
+		t.Fatalf("fixed-width panel was remeasured %d times", right.measurements)
+	}
+	view.Refresh()
+	if left.refreshes == 0 || right.refreshes == 0 || right.measurements == 0 {
+		t.Fatal("explicit refresh must still update content and measurements")
 	}
 }

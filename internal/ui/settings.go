@@ -209,27 +209,27 @@ func (r *equalWidthRadioRenderer) Refresh() {
 	r.Layout(r.radio.Size())
 }
 
-const extractionSettingsWidth float32 = 230
+const extractionSettingsWidth float32 = 200
 
-// The settings always stay in two columns. Scrolling only handles extra height
-// from warnings or an unusually short window.
+// The settings always stay in two columns and keep their natural height. The
+// window minimum size protects this area from being compressed, so only the
+// results area participates in vertical window resizing.
 type settingsView struct {
 	widget.BaseWidget
 	panels [2]fyne.CanvasObject
 	grid   *fyne.Container
 	extent *settingsExtent
-	scroll *container.Scroll
 
 	measured      bool
 	measureWidth  [2]float32
 	measureHeight [2]float32
+	fixedHeight   float32
 }
 
 func newSettingsView(left, right fyne.CanvasObject) *settingsView {
 	v := &settingsView{panels: [2]fyne.CanvasObject{left, right}, extent: &settingsExtent{}}
 	v.ExtendBaseWidget(v)
 	v.grid = container.New(v.extent, left, right)
-	v.scroll = container.NewVScroll(v.grid)
 	return v
 }
 func (v *settingsView) CreateRenderer() fyne.WidgetRenderer { return &settingsRenderer{view: v} }
@@ -245,10 +245,19 @@ func (*settingsExtent) Layout([]fyne.CanvasObject, fyne.Size)   {}
 
 type settingsRenderer struct{ view *settingsView }
 
-func (r *settingsRenderer) MinSize() fyne.Size           { return fyne.NewSize(660, 200) }
-func (r *settingsRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.view.scroll} }
+func (r *settingsRenderer) MinSize() fyne.Size {
+	return fyne.NewSize(660, max(float32(200), r.view.fixedHeight))
+}
+func (r *settingsRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.view.grid} }
 func (r *settingsRenderer) Destroy()                     {}
-func (r *settingsRenderer) Refresh()                     { r.Layout(r.view.Size()); canvas.Refresh(r.view) }
+func (r *settingsRenderer) Refresh() {
+	// Explicit content/theme changes refresh children and invalidate measurements.
+	// A resize must only update geometry, not recursively refresh every control.
+	r.view.grid.Refresh()
+	r.view.invalidateMeasure()
+	r.Layout(r.view.Size())
+	canvas.Refresh(r.view)
+}
 func (r *settingsRenderer) Layout(size fyne.Size) {
 	v := r.view
 	width := max(float32(0), size.Width)
@@ -257,6 +266,9 @@ func (r *settingsRenderer) Layout(size fyne.Size) {
 	panelWidths := [2]float32{leftWidth, extractionSettingsWidth}
 	if !v.measured || v.measureWidth != panelWidths {
 		for i, panel := range v.panels {
+			if v.measured && v.measureWidth[i] == panelWidths[i] {
+				continue
+			}
 			// Keep the previous allocated height while measuring width-dependent
 			// wrapping. Do not shrink and then re-grow every panel on each frame.
 			previousHeight := panel.Size().Height
@@ -269,7 +281,8 @@ func (r *settingsRenderer) Layout(size fyne.Size) {
 		v.measureWidth = panelWidths
 		v.measured = true
 	}
-	height := max(size.Height, v.measureHeight[0], v.measureHeight[1])
+	height := max(float32(200), v.measureHeight[0], v.measureHeight[1])
+	v.fixedHeight = height
 	for i, panel := range v.panels {
 		x := float32(0)
 		if i == 1 {
@@ -278,16 +291,8 @@ func (r *settingsRenderer) Layout(size fyne.Size) {
 		panel.Move(fyne.NewPos(x, 0))
 		panel.Resize(fyne.NewSize(panelWidths[i], height))
 	}
-	previous := v.extent.size
 	v.extent.size = fyne.NewSize(width, height)
 	v.grid.Resize(v.extent.size)
-	resized := v.scroll.Size() != size
-	v.scroll.Resize(size)
-	// Resize already updates the scroll bars. Only refresh on a content-height
-	// change at a fixed viewport size, e.g. a newly displayed conflict warning.
-	if !resized && previous != v.extent.size {
-		v.scroll.Refresh()
-	}
 }
 
 // Settings and results use the same horizontal edges and a single gap.
@@ -305,9 +310,15 @@ func (l workspaceLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	if len(objects) != 2 {
 		return
 	}
-	settingsHeight := min(objects[0].MinSize().Height, max(float32(0), size.Height-l.gap-objects[1].MinSize().Height))
+	settingsHeight := objects[0].MinSize().Height
 	objects[0].Move(fyne.NewPos(0, 0))
 	objects[0].Resize(fyne.NewSize(size.Width, settingsHeight))
+	// Width-dependent wrapping may change the natural height during Resize.
+	// Use the new measurement immediately, without recursively refreshing children.
+	if measuredHeight := objects[0].MinSize().Height; measuredHeight != settingsHeight {
+		settingsHeight = measuredHeight
+		objects[0].Resize(fyne.NewSize(size.Width, settingsHeight))
+	}
 	objects[1].Move(fyne.NewPos(0, settingsHeight+l.gap))
 	objects[1].Resize(fyne.NewSize(size.Width, max(float32(0), size.Height-settingsHeight-l.gap)))
 }

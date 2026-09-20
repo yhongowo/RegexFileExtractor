@@ -53,7 +53,7 @@ func New(a fyne.App, cfg config.Config, path string, loadErr error) *Controller 
 	c.Window = a.NewWindow("Regex File Extractor")
 	c.Window.SetCloseIntercept(c.close)
 	c.build()
-	c.Window.Resize(fyne.NewSize(800, 600))
+	c.Window.Resize(fyne.NewSize(720, 600))
 	return c
 }
 
