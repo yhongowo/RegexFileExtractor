@@ -16,7 +16,7 @@ type resultRow struct {
 	owner    *Controller
 	id       int
 	check    *widget.Check
-	labels   [5]*widget.Label
+	labels   [5]*singleLineLabel
 	content  *fyne.Container
 	fileSize int64
 	filePath string
@@ -34,8 +34,7 @@ func newResultRow(c *Controller) *resultRow {
 	})
 	objects := []fyne.CanvasObject{r.check}
 	for i := range r.labels {
-		r.labels[i] = widget.NewLabel("")
-		r.labels[i].Truncation = fyne.TextTruncateEllipsis
+		r.labels[i] = newSingleLineLabel("")
 		objects = append(objects, r.labels[i])
 	}
 	r.content = container.New(resultColumns{}, objects...)
@@ -65,7 +64,7 @@ func (r *resultRow) update(id int) {
 	}
 	values := [5]string{f.Name, f.Path, size, f.Rule, c.outputs[f.Path]}
 	for i, value := range values {
-		setLabel(r.labels[i], value)
+		r.labels[i].SetText(value)
 	}
 }
 
@@ -121,8 +120,7 @@ func (c *Controller) makeResults() (*widget.List, fyne.CanvasObject) {
 	c.selectAllCheck = newSelectionHeaderCheck(c.tr("all"), func(checked bool) { c.selectAll(checked) })
 	headers := []fyne.CanvasObject{c.selectAllCheck}
 	for _, key := range []string{"filename", "path", "size", "matchedRule", "outputPath"} {
-		label := widget.NewLabel(c.tr(key))
-		label.Truncation = fyne.TextTruncateEllipsis
+		label := newSingleLineLabel(c.tr(key))
 		headers = append(headers, label)
 	}
 	return list, container.New(resultColumns{}, headers...)

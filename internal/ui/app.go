@@ -35,7 +35,8 @@ type Controller struct {
 	details                                string
 	source, target                         *widget.Entry
 	rule                                   *widget.Select
-	pattern, status, selection, warning    *widget.Label
+	selection, warning                     *widget.Label
+	pattern, status                        *singleLineLabel
 	emptyView                              fyne.CanvasObject
 	resultList                             *widget.List
 	resultsCard                            fyne.CanvasObject
@@ -112,9 +113,8 @@ func (c *Controller) build() {
 		c.invalidate()
 		c.persist()
 	}
-	c.pattern = widget.NewLabel("")
+	c.pattern = newSingleLineLabel("")
 	c.pattern.TextStyle.Monospace = true
-	c.pattern.Truncation = fyne.TextTruncateEllipsis
 	c.refreshPattern()
 	copyPattern := newLabeledIconButton(c.tr("copyPattern"), copyIcon, func() {
 		c.Window.Clipboard().SetContent(c.pattern.Text)
@@ -188,8 +188,7 @@ func (c *Controller) build() {
 	))
 	c.resultsCard = results
 
-	c.status = widget.NewLabel("")
-	c.status.Truncation = fyne.TextTruncateEllipsis
+	c.status = newSingleLineLabel("")
 	c.progress = widget.NewProgressBar()
 	c.progress.Hide()
 	c.activity = widget.NewProgressBarInfinite()
@@ -444,7 +443,7 @@ func (c *Controller) startScan() {
 		result, err := core.Scan(ctx, opts, func(p core.ScanProgress) {
 			// Scan already throttles progress updates. Do not make filesystem work
 			// wait for the next GUI frame; that causes visible stalls under load.
-			fyne.Do(func() { setLabel(c.status, fmt.Sprintf(c.tr("scanProgress"), p.Visited, p.Matched)) })
+			fyne.Do(func() { c.status.SetText(fmt.Sprintf(c.tr("scanProgress"), p.Visited, p.Matched)) })
 		})
 		fyne.Do(func() {
 			if c.finish() {

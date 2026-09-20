@@ -59,3 +59,24 @@ func BenchmarkPreviewSelection(b *testing.B) {
 		c.refreshPlan()
 	}
 }
+
+func BenchmarkWindowResizeWithResults(b *testing.B) {
+	a := test.NewApp()
+	a.Settings().SetTheme(Theme())
+	c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
+	defer a.Quit()
+	c.files = make([]core.File, 10000)
+	c.selected = make([]bool, len(c.files))
+	for i := range c.files {
+		c.files[i] = core.File{Path: fmt.Sprintf("D:/measurements/production-line/batch-%05d/channel-01/X%04d.csv", i, i%100), Name: fmt.Sprintf("X%04d.csv", i%100), Size: 1024, Rule: "XY CSV"}
+		c.selected[i] = true
+	}
+	c.refreshPlan()
+	c.Window.Show()
+	c.Window.Resize(fyne.NewSize(1000, 720))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.Window.Resize(fyne.NewSize(float32(800+i%600), float32(600+i%180)))
+	}
+}
