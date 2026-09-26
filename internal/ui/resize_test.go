@@ -23,6 +23,7 @@ func TestResizeAndVirtualization(t *testing.T) {
 	create := c.resultList.CreateItem
 	c.resultList.CreateItem = func() fyne.CanvasObject { created++; return create() }
 	c.refreshPlan()
+	awaitBackground(t, c)
 	row := newResultRow(c)
 	row.update(0)
 	iconCommands := 0

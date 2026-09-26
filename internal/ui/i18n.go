@@ -1,6 +1,10 @@
 package ui
 
 var translations = map[string][2]string{
+	"savingSettings":    {"正在保存设置…", "Saving settings…"},
+	"planning":          {"正在计算输出路径…", "Calculating output paths…"},
+	"copyChecking":      {"正在检查文件 %d / %d", "Checking files %d / %d"},
+	"copyBytes":         {"复制 %d / %d · 已处理 %s / %s · 跳过 %d · 失败 %d", "Copying %d / %d · Processed %s / %s · Skipped %d · Failed %d"},
 	"copyFailed":        {"复制中断：成功 %d · 跳过 %d · 失败 %d", "Copy stopped: %d copied · %d skipped · %d failed"},
 	"exitWithoutSaving": {"设置保存失败，放弃保存并退出？\n\n%s", "Failed to save settings. Exit without saving?\n\n%s"},
 	"inputs":            {"扫描设置", "Scan settings"},

@@ -27,6 +27,16 @@ type Controller struct {
 	files                                  []core.File
 	selected                               []bool
 	planScratch                            []core.File
+	planRunning                            bool
+	planPending                            bool
+	planVersion                            uint64
+	planStatus                             string
+	planCancel                             context.CancelFunc
+	nextPlan                               *planRequest
+	dispatch                               func(func())
+	saveRunning                            bool
+	saveQueue                              []saveRequest
+	closing, closed                        bool
 	plan                                   []core.Entry
 	outputs                                map[string]string
 	busy                                   bool
@@ -50,7 +60,7 @@ type Controller struct {
 }
 
 func New(a fyne.App, cfg config.Config, path string, loadErr error) *Controller {
-	c := &Controller{app: a, cfg: cfg, configPath: path, loadErr: loadErr, outputs: map[string]string{}}
+	c := &Controller{app: a, cfg: cfg, configPath: path, loadErr: loadErr, outputs: map[string]string{}, dispatch: fyne.Do}
 	c.Window = a.NewWindow("Regex File Extractor")
 	c.Window.SetCloseIntercept(c.close)
 	c.build()
@@ -188,6 +198,7 @@ func (c *Controller) build() {
 	))
 	c.resultsCard = results
 
+	c.planStatus = ""
 	c.status = newSingleLineLabel("")
 	c.progress = widget.NewProgressBar()
 	c.progress.Hide()
@@ -235,7 +246,7 @@ func (c *Controller) refreshTargetPlaceholder() {
 }
 
 func (c *Controller) setLanguage(value string) {
-	if c.cfg.Language == value {
+	if c.cfg.Language == value || c.closing {
 		return
 	}
 	before := c.cfg.Language
@@ -275,8 +286,8 @@ func (c *Controller) refreshPattern() {
 
 func (c *Controller) invalidate() {
 	c.files = nil
-	c.selected = nil
 	c.planScratch = nil
+	c.selected = nil
 	c.outputs = make(map[string]string)
 	c.details = ""
 	if c.status != nil {
@@ -287,7 +298,7 @@ func (c *Controller) invalidate() {
 	}
 }
 func (c *Controller) selectAll(value bool) {
-	if c.busy {
+	if c.busy || c.closing {
 		return
 	}
 	for i := range c.selected {
@@ -296,30 +307,47 @@ func (c *Controller) selectAll(value bool) {
 	c.refreshPlan()
 }
 func (c *Controller) refreshPlan() {
-	clear(c.planScratch)
-	selected := c.planScratch[:0]
-	if cap(selected) < len(c.files) {
-		selected = make([]core.File, 0, len(c.files))
+	if !c.planPending && c.status != nil {
+		c.planStatus = c.status.Text
 	}
+	c.planVersion++
+	if c.planCancel != nil {
+		c.planCancel()
+	}
+	c.nextPlan = nil
+	var count int
 	var size int64
 	for i, f := range c.files {
 		if c.selected[i] {
-			selected = append(selected, f)
+			count++
 			size += f.Size
 		}
 	}
-	plan, err := core.Plan(selected, c.cfg.Layout)
-	c.planScratch = selected
-	c.plan = plan
-	clear(c.outputs)
-	for _, entry := range plan {
-		c.outputs[entry.File.Path] = entry.Relative
+	previousOutputs := c.outputs
+	c.plan = nil
+	c.outputs = nil
+	c.planPending = count > 0
+	request := planRequest{version: c.planVersion, files: c.files, selected: append([]bool(nil), c.selected...), layout: c.cfg.Layout, outputBuffer: previousOutputs}
+	if count == 0 {
+		c.planPending = false
+		c.applyPlan(nil, nil, nil)
+	} else if len(c.files) <= asyncPlanThreshold {
+		request.scratch = c.planScratch
+		plan, outputs, err := calculatePlan(context.Background(), &request)
+		c.planPending = false
+		c.planScratch = request.scratch
+		c.applyPlan(plan, outputs, err)
+	} else {
+		c.nextPlan = &request
+		c.launchPlan()
+		c.setPlanWarning("")
+		c.status.SetText(c.tr("planning"))
 	}
 	if c.selection != nil {
-		setLabel(c.selection, fmt.Sprintf(c.tr("selection"), len(selected), len(c.files), formatSize(size)))
+		setLabel(c.selection, fmt.Sprintf(c.tr("selection"), count, len(c.files), formatSize(size)))
 	}
 	if c.selectAllCheck != nil {
-		allSelected := len(c.files) > 0 && len(selected) == len(c.files)
+		allSelected := len(c.files) > 0 && count == len(c.files)
 		c.selectAllCheck.label = c.tr("all")
 		if allSelected {
 			c.selectAllCheck.label = c.tr("none")
@@ -329,23 +357,6 @@ func (c *Controller) refreshPlan() {
 			c.selectAllCheck.OnChanged = nil
 			c.selectAllCheck.SetChecked(allSelected)
 			c.selectAllCheck.OnChanged = changed
-		}
-	}
-	if c.warning != nil {
-		previousWarning := c.warning.Text
-		warning := ""
-		if err != nil {
-			warning = err.Error()
-		}
-		setLabel(c.warning, warning)
-		if c.warning.Text == "" {
-			c.warning.Hide()
-		} else {
-			c.warning.Show()
-		}
-		if previousWarning != warning && c.settings != nil {
-			c.settings.invalidateMeasure()
-			c.settings.Refresh()
 		}
 	}
 	if c.resultList != nil {
@@ -362,26 +373,26 @@ func (c *Controller) refreshPlan() {
 }
 func (c *Controller) updateControls() {
 	for _, control := range c.controls {
-		if c.busy {
+		if c.busy || c.closing {
 			control.Disable()
 		} else {
 			control.Enable()
 		}
 	}
 	if c.selectAllCheck != nil {
-		setDisabled(c.selectAllCheck, c.busy || len(c.files) == 0)
+		setDisabled(c.selectAllCheck, c.busy || c.closing || len(c.files) == 0)
 	}
 	if c.scan == nil {
 		return
 	}
-	if c.busy {
+	if c.busy || c.closing {
 		c.scan.Disable()
 		c.copy.Disable()
-		c.cancelButton.Enable()
+		setDisabled(c.cancelButton, c.closing)
 	} else {
 		c.scan.Enable()
 		c.cancelButton.Disable()
-		if len(c.plan) > 0 {
+		if len(c.plan) > 0 && !c.planPending && !c.closing {
 			c.copy.Enable()
 		} else {
 			c.copy.Disable()
@@ -407,20 +418,20 @@ func setButtonIcon(button *widget.Button, enabled, disabled fyne.Resource) {
 		button.SetIcon(want)
 	}
 }
+
+// persist queues a snapshot; true means accepted, not yet written to disk.
+// Save errors are reported on the UI thread and closing always retries the latest state.
 func (c *Controller) persist() bool {
 	if c.loadErr != nil {
 		c.fail(errors.New(c.tr("readOnly")))
 		return false
 	}
-	if err := config.Save(c.configPath, c.cfg); err != nil {
-		c.fail(err)
-		return false
-	}
+	c.saveConfig(c.cfg, nil)
 	return true
 }
 
 func (c *Controller) startScan() {
-	if c.busy {
+	if c.busy || c.closing {
 		return
 	}
 	rule, ok := c.currentRule()
@@ -443,9 +454,13 @@ func (c *Controller) startScan() {
 		result, err := core.Scan(ctx, opts, func(p core.ScanProgress) {
 			// Scan already throttles progress updates. Do not make filesystem work
 			// wait for the next GUI frame; that causes visible stalls under load.
-			fyne.Do(func() { c.status.SetText(fmt.Sprintf(c.tr("scanProgress"), p.Visited, p.Matched)) })
+			c.dispatch(func() {
+				if !c.closed && ctx.Err() == nil {
+					c.status.SetText(fmt.Sprintf(c.tr("scanProgress"), p.Visited, p.Matched))
+				}
+			})
 		})
-		fyne.Do(func() {
+		c.dispatch(func() {
 			if c.finish() {
 				return
 			}
@@ -472,7 +487,7 @@ func (c *Controller) startScan() {
 	}()
 }
 func (c *Controller) confirmCopy() {
-	if c.busy || len(c.plan) == 0 {
+	if c.busy || c.closing || c.planPending || len(c.plan) == 0 {
 		return
 	}
 	if c.effectiveDestination() == "" {
@@ -490,7 +505,7 @@ func (c *Controller) confirmCopy() {
 	}
 }
 func (c *Controller) startCopy() {
-	if c.busy || len(c.plan) == 0 {
+	if c.busy || c.closing || c.planPending || len(c.plan) == 0 {
 		return
 	}
 	if !c.persist() {
@@ -499,18 +514,32 @@ func (c *Controller) startCopy() {
 	entries := c.plan // Immutable while the copy task locks selection and settings.
 	target, conflict := c.effectiveDestination(), c.cfg.Conflict
 	c.details = ""
-	ctx := c.begin(false)
-	c.status.SetText(fmt.Sprintf(c.tr("copyProgress"), 0, len(entries), 0, 0, 0))
+	ctx := c.begin(true)
+	c.status.SetText(fmt.Sprintf(c.tr("copyChecking"), 0, len(entries)))
 	go func() {
 		result, err := core.Copy(ctx, target, entries, conflict, func(p core.CopyProgress) {
 			// Copy progress is throttled by core.Copy. Queue it for the UI instead
 			// of blocking the copy goroutine behind rendering.
-			fyne.Do(func() {
-				c.progress.SetValue(float64(p.Done) / float64(p.Total))
-				c.status.SetText(fmt.Sprintf(c.tr("copyProgress"), p.Done, p.Total, p.Copied, p.Skipped, p.Failed))
+			c.dispatch(func() {
+				if c.closed || ctx.Err() != nil {
+					return
+				}
+				if p.Phase == core.CopyChecking {
+					c.status.SetText(fmt.Sprintf(c.tr("copyChecking"), p.Checked, p.Total))
+					return
+				}
+				c.activity.Stop()
+				c.activity.Hide()
+				c.progress.Show()
+				fraction := float64(p.Done) / float64(max(1, p.Total))
+				if p.BytesTotal > 0 {
+					fraction = float64(p.BytesDone) / float64(p.BytesTotal)
+				}
+				c.progress.SetValue(fraction)
+				c.status.SetText(fmt.Sprintf(c.tr("copyBytes"), p.Done, p.Total, formatSize(p.BytesDone), formatSize(p.BytesTotal), p.Skipped, p.Failed))
 			})
 		})
-		fyne.Do(func() {
+		c.dispatch(func() {
 			if c.finish() {
 				return
 			}
@@ -566,8 +595,8 @@ func (c *Controller) finish() bool {
 	c.updateControls()
 	c.resultList.Refresh()
 	if c.closeAfterCancel {
-		c.Window.SetCloseIntercept(nil)
-		c.Window.Close()
+		c.closeAfterCancel = false
+		c.close()
 		return true
 	}
 	return false
@@ -589,16 +618,42 @@ func (c *Controller) close() {
 		})
 		return
 	}
-	if c.loadErr == nil {
-		if err := config.Save(c.configPath, c.cfg); err != nil {
-			c.confirm(c.tr("error"), fmt.Sprintf(c.tr("exitWithoutSaving"), err.Error()), c.tr("ok"), func(ok bool) {
-				if ok {
-					c.Window.SetCloseIntercept(nil)
-					c.Window.Close()
-				}
-			})
+	if c.closing || c.closed {
+		return
+	}
+	if c.loadErr != nil {
+		c.closeWindow()
+		return
+	}
+	c.closing = true
+	c.status.SetText(c.tr("savingSettings"))
+	c.updateControls()
+	c.resultList.Refresh()
+	c.saveConfig(c.cfg, func(err error) {
+		if err == nil {
+			c.closeWindow()
 			return
 		}
+		c.closing = false
+		c.status.SetText(c.tr("error"))
+		c.updateControls()
+		c.resultList.Refresh()
+		c.confirm(c.tr("error"), fmt.Sprintf(c.tr("exitWithoutSaving"), err.Error()), c.tr("ok"), func(ok bool) {
+			if ok {
+				c.closeWindow()
+			}
+		})
+	})
+}
+
+func (c *Controller) closeWindow() {
+	if c.closed {
+		return
+	}
+	c.closed = true
+	c.nextPlan = nil
+	if c.planCancel != nil {
+		c.planCancel()
 	}
 	c.Window.SetCloseIntercept(nil)
 	c.Window.Close()

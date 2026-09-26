@@ -17,7 +17,9 @@ func BenchmarkWindowResize(b *testing.B) {
 	a.Settings().SetTheme(Theme())
 	c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
 	c.Window.Show()
+	installTestDispatcher(b, c)
 	defer a.Quit()
+	defer func() { awaitBackground(b, c) }()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -32,7 +34,9 @@ func BenchmarkWindowVerticalResize(b *testing.B) {
 	a.Settings().SetTheme(Theme())
 	c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
 	c.Window.Show()
+	installTestDispatcher(b, c)
 	defer a.Quit()
+	defer func() { awaitBackground(b, c) }()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -44,7 +48,9 @@ func BenchmarkPreviewSelection(b *testing.B) {
 	a := test.NewApp()
 	a.Settings().SetTheme(Theme())
 	c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
+	installTestDispatcher(b, c)
 	defer a.Quit()
+	defer func() { awaitBackground(b, c) }()
 	c.files = make([]core.File, 10000)
 	c.selected = make([]bool, len(c.files))
 	for i := range c.files {
@@ -52,11 +58,13 @@ func BenchmarkPreviewSelection(b *testing.B) {
 		c.selected[i] = true
 	}
 	c.refreshPlan()
+	awaitBackground(b, c)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.selected[0] = !c.selected[0]
 		c.refreshPlan()
+		awaitBackground(b, c)
 	}
 }
 
@@ -64,7 +72,9 @@ func BenchmarkWindowResizeWithResults(b *testing.B) {
 	a := test.NewApp()
 	a.Settings().SetTheme(Theme())
 	c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
+	installTestDispatcher(b, c)
 	defer a.Quit()
+	defer func() { awaitBackground(b, c) }()
 	c.files = make([]core.File, 10000)
 	c.selected = make([]bool, len(c.files))
 	for i := range c.files {
@@ -72,11 +82,36 @@ func BenchmarkWindowResizeWithResults(b *testing.B) {
 		c.selected[i] = true
 	}
 	c.refreshPlan()
+	awaitBackground(b, c)
 	c.Window.Show()
 	c.Window.Resize(fyne.NewSize(1000, 720))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.Window.Resize(fyne.NewSize(float32(800+i%600), float32(600+i%180)))
+	}
+}
+
+// Measures the event handler only; completion latency is measured separately by
+// BenchmarkPreviewSelection. Keep the UI dispatcher paused to model rapid input.
+func BenchmarkPreviewSelectionDispatch(b *testing.B) {
+	for _, count := range []int{10000, 100000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			a := test.NewApp()
+			a.Settings().SetTheme(Theme())
+			c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
+			installTestDispatcher(b, c)
+			defer a.Quit()
+			defer func() { awaitBackground(b, c) }()
+			seedLargeResults(c, count)
+			awaitBackground(b, c)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				c.selected[0] = !c.selected[0]
+				c.refreshPlan()
+			}
+			b.StopTimer()
+		})
 	}
 }

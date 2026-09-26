@@ -26,7 +26,7 @@ func newResultRow(c *Controller) *resultRow {
 	r := &resultRow{owner: c, id: -1}
 	r.ExtendBaseWidget(r)
 	r.check = widget.NewCheck("", func(value bool) {
-		if c.busy || r.id < 0 || r.id >= len(c.selected) || c.selected[r.id] == value {
+		if c.busy || c.closing || r.id < 0 || r.id >= len(c.selected) || c.selected[r.id] == value {
 			return
 		}
 		c.selected[r.id] = value
@@ -54,7 +54,7 @@ func (r *resultRow) update(id int) {
 		r.check.SetChecked(c.selected[id])
 	}
 	r.check.OnChanged = changed
-	setDisabled(r.check, c.busy)
+	setDisabled(r.check, c.busy || c.closing)
 	f := c.files[id]
 	size := r.labels[2].Text
 	if r.filePath != f.Path || r.fileSize != f.Size {

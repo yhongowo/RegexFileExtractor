@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,14 @@ type Entry struct {
 // Plan is deterministic and never writes files. Group identity includes the extension.
 // Folder and file names share one Windows-style case-insensitive namespace.
 func Plan(files []File, layout Layout) ([]Entry, error) {
+	return PlanContext(context.Background(), files, layout)
+}
+
+// PlanContext allows superseded UI previews to stop without publishing partial results.
+func PlanContext(ctx context.Context, files []File, layout Layout) ([]Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if layout != Flat && layout != Group && layout != Auto {
 		return nil, fmt.Errorf("unknown layout: %s", layout)
 	}
@@ -49,6 +58,9 @@ func Plan(files []File, layout Layout) ([]Entry, error) {
 	// is noticeable when selection changes in a large result list.
 	fileGroups := make([]*groupInfo, len(ordered))
 	for i, f := range ordered {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := validName(f.Name); err != nil {
 			return nil, err
 		}
@@ -71,11 +83,17 @@ func Plan(files []File, layout Layout) ([]Entry, error) {
 	sort.Strings(keys)
 	used := map[string]bool{}
 	for key, g := range groups {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if layout == Flat || (layout == Auto && g.count == 1) {
 			used[key] = true
 		}
 	}
 	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		g := groups[key]
 		if layout == Group || (layout == Auto && g.count > 1) {
 			name := g.name
@@ -88,6 +106,9 @@ func Plan(files []File, layout Layout) ([]Entry, error) {
 			}
 			folder := base
 			for n := 2; used[strings.ToLower(folder)]; n++ {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				folder = fmt.Sprintf("%s_%03d", base, n)
 			}
 			used[strings.ToLower(folder)] = true
@@ -108,6 +129,9 @@ func Plan(files []File, layout Layout) ([]Entry, error) {
 	}
 	plan := make([]Entry, 0, len(ordered))
 	for i, f := range ordered {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		g := fileGroups[i]
 		rel := g.name // Same spelling for case-only duplicate names.
 		if g.folder != "" {
@@ -117,6 +141,9 @@ func Plan(files []File, layout Layout) ([]Entry, error) {
 			g.next++
 			candidate := fmt.Sprintf("%s_%03d%s", g.stem, g.next, g.ext)
 			for used[strings.ToLower(candidate)] {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				g.next++
 				candidate = fmt.Sprintf("%s_%03d%s", g.stem, g.next, g.ext)
 			}

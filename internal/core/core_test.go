@@ -270,7 +270,11 @@ func TestCopyCancellation(t *testing.T) {
 	put(t, dst, "b.csv", "original")
 	plan, _ := Plan([]File{a, b}, Flat)
 	ctx, cancel := context.WithCancel(context.Background())
-	result, err := Copy(ctx, dst, plan, Overwrite, func(CopyProgress) { cancel() })
+	result, err := Copy(ctx, dst, plan, Overwrite, func(p CopyProgress) {
+		if p.Done == 1 {
+			cancel()
+		}
+	})
 	if !errors.Is(err, context.Canceled) || result.Copied != 1 {
 		t.Fatalf("%+v %v", result, err)
 	}
@@ -330,5 +334,94 @@ func TestCopyRejectsOutputLinks(t *testing.T) {
 	result, err = Copy(context.Background(), groupDst, plan, Overwrite, nil)
 	if err != nil || result.Failed != 1 {
 		t.Fatalf("unsafe directory link: %+v %v", result, err)
+	}
+}
+
+func TestCopyPreflightCancellationDoesNotWrite(t *testing.T) {
+	src := t.TempDir()
+	file := put(t, src, "a.csv", "a")
+	dst := filepath.Join(t.TempDir(), "not-created")
+	plan, _ := Plan([]File{file}, Flat)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result, err := Copy(ctx, dst, plan, Skip, func(p CopyProgress) {
+		if p.Phase != CopyChecking || p.Done != 0 {
+			t.Fatal("missing preflight phase")
+		}
+		cancel()
+	})
+	if !errors.Is(err, context.Canceled) || result.Copied != 0 {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatal("preflight cancellation created destination")
+	}
+}
+
+func TestCopyByteProgressAndSkippedFiles(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	a := put(t, src, "a.csv", strings.Repeat("a", 600000))
+	b := put(t, src, "b.csv", "skip")
+	put(t, dst, "b.csv", "existing")
+	plan, _ := Plan([]File{a, b}, Flat)
+	var updates []CopyProgress
+	result, err := Copy(context.Background(), dst, plan, Skip, func(p CopyProgress) { updates = append(updates, p) })
+	if err != nil || result.Copied != 1 || result.Skipped != 1 {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if updates[0].Phase != CopyChecking {
+		t.Fatal("missing checking phase")
+	}
+	last := updates[len(updates)-1]
+	if last.Phase != CopyTransferring || last.Done != 2 || last.BytesDone != a.Size+b.Size || last.BytesTotal != last.BytesDone || last.BytesCopied != a.Size {
+		t.Fatalf("bad final byte accounting: %+v", last)
+	}
+	var previous int64
+	for _, p := range updates {
+		if p.BytesDone < previous || p.BytesDone > p.BytesTotal {
+			t.Fatalf("non-monotonic progress: %+v", p)
+		}
+		previous = p.BytesDone
+	}
+}
+
+func TestCopyOneMidFileCancellationPreservesTarget(t *testing.T) {
+	for _, policy := range []Conflict{Skip, Overwrite} {
+		t.Run(string(policy), func(t *testing.T) {
+			src, dst := t.TempDir(), t.TempDir()
+			file := put(t, src, "a.csv", strings.Repeat("a", 1024*1024))
+			target := filepath.Join(dst, "a.csv")
+			if policy == Overwrite {
+				put(t, dst, "a.csv", "original")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			written := 0
+			_, err := copyOne(ctx, file, target, policy, make([]byte, 256*1024), func(n int) { written += n; cancel() })
+			if !errors.Is(err, context.Canceled) || written != 256*1024 {
+				t.Fatalf("written=%d err=%v", written, err)
+			}
+			if policy == Overwrite {
+				if read(t, target) != "original" {
+					t.Fatal("cancellation replaced target")
+				}
+			} else if _, err := os.Stat(target); !os.IsNotExist(err) {
+				t.Fatal("partial output retained")
+			}
+			entries, _ := os.ReadDir(dst)
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), ".regex-extract-") {
+					t.Fatal("temporary file retained")
+				}
+			}
+		})
+	}
+}
+
+func TestPlanContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := PlanContext(ctx, []File{{Path: "a", Name: "a.csv"}}, Auto); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }

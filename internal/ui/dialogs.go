@@ -124,11 +124,8 @@ func (c *Controller) editRule(edit bool) {
 			c.fail(fmt.Errorf("%s", c.tr("readOnly")))
 			return
 		}
-		if err := config.Save(c.configPath, next); err != nil {
-			c.fail(err)
-			return
-		}
 		c.cfg = next
+		c.persist()
 		c.invalidate()
 		d.Hide()
 		c.build()
@@ -189,11 +186,8 @@ func (c *Controller) deleteRule() {
 			c.fail(fmt.Errorf("%s", c.tr("readOnly")))
 			return
 		}
-		if err := config.Save(c.configPath, next); err != nil {
-			c.fail(err)
-			return
-		}
 		c.cfg = next
+		c.persist()
 		c.invalidate()
 		c.build()
 	})

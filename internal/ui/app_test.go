@@ -6,7 +6,9 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
@@ -19,9 +21,10 @@ func testController(t *testing.T) *Controller {
 	a := test.NewApp()
 	a.Settings().SetTheme(Theme())
 	c := New(a, config.Default(), filepath.Join(t.TempDir(), "config.json"), nil)
+	installTestDispatcher(t, c)
 	c.Window.Resize(fyne.NewSize(1280, 820))
 	c.Window.Show()
-	t.Cleanup(func() { c.Window.SetCloseIntercept(nil); c.Window.Close(); a.Quit() })
+	t.Cleanup(func() { awaitBackground(t, c); c.closeWindow(); a.Quit() })
 	return c
 }
 func seedResults(c *Controller) {
@@ -77,6 +80,7 @@ func TestSelectionAndInvalidation(t *testing.T) {
 	if c.cfg.SelectedRule != "datalog" || len(c.files) != 0 {
 		t.Fatal("rule selection not exclusive or results stale")
 	}
+	awaitBackground(t, c)
 	stored, err := config.Load(c.configPath)
 	if err != nil || stored.SelectedRule != "datalog" {
 		t.Fatal("selection not saved")
@@ -138,6 +142,7 @@ func TestLanguageCoverage(t *testing.T) {
 	if c.cfg.Language != "en" || c.scan.Text != "Scan" || len(c.files) != 4 {
 		t.Fatal("language switch lost state")
 	}
+	awaitBackground(t, c)
 	stored, err := config.Load(c.configPath)
 	if err != nil || stored.Language != "en" {
 		t.Fatal("language switch was not saved")
@@ -256,6 +261,7 @@ func TestDefaultOutputPlaceholder(t *testing.T) {
 	assertDefault()
 	c.setLanguage("en")
 	assertDefault()
+	awaitBackground(t, c)
 	stored, err := config.Load(c.configPath)
 	if err != nil || stored.Destination != "" {
 		t.Fatalf("default was saved as an explicit destination: %+v, %v", stored, err)
@@ -301,5 +307,34 @@ func TestDefaultOutputCopyAndRescan(t *testing.T) {
 	}
 	if c.target.Text != "" || c.cfg.Destination != "" {
 		t.Fatal("copy populated the output value")
+	}
+}
+
+// Fyne's test driver executes Do immediately. Explicitly pump callbacks on the
+// test goroutine to model the native event loop and avoid concurrent widget access.
+var testDispatchers sync.Map
+
+func installTestDispatcher(t testing.TB, c *Controller) {
+	events := make(chan func(), 100)
+	c.dispatch = func(f func()) { events <- f }
+	testDispatchers.Store(c, events)
+	t.Cleanup(func() { testDispatchers.Delete(c) })
+}
+func awaitBackground(t testing.TB, c *Controller) {
+	t.Helper()
+	value, ok := testDispatchers.Load(c)
+	if !ok {
+		t.Fatal("missing test dispatcher")
+	}
+	events := value.(chan func())
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	for c.planRunning || c.saveRunning || c.busy {
+		select {
+		case f := <-events:
+			f()
+		case <-timeout.C:
+			t.Fatal("background operation timed out")
+		}
 	}
 }

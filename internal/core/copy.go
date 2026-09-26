@@ -11,7 +11,18 @@ import (
 	"time"
 )
 
+type CopyPhase string
+
+const (
+	CopyChecking     CopyPhase = "checking"
+	CopyTransferring CopyPhase = "copying"
+)
+
 type CopyProgress struct {
+	Phase   CopyPhase
+	Checked int
+	// BytesDone includes completed, skipped and failed entries; BytesCopied counts actual writes.
+	BytesDone, BytesCopied, BytesTotal   int64
 	Done, Total, Copied, Skipped, Failed int
 	Path                                 string
 }
@@ -30,12 +41,30 @@ func Copy(ctx context.Context, destination string, entries []Entry, conflict Con
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	p := CopyProgress{Phase: CopyChecking, Total: len(entries)}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		p.BytesTotal += entry.File.Size
+	}
+	last := time.Time{}
+	report := func(force bool) {
+		if progress != nil && (force || time.Since(last) >= 100*time.Millisecond) {
+			progress(p)
+			last = time.Now()
+		}
+	}
+	report(true)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	root, err := CanonicalPath(destination)
 	if err != nil {
 		return result, err
 	}
 	protected := map[string]bool{}
-	for _, entry := range entries {
+	for i, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
@@ -44,6 +73,8 @@ func Copy(ctx context.Context, destination string, entries []Entry, conflict Con
 			return result, err
 		}
 		protected[strings.ToLower(filepath.Clean(path))] = true
+		p.Checked = i + 1
+		report(false)
 		if !filepath.IsLocal(entry.Relative) {
 			return result, fmt.Errorf("output path escapes destination: %s", entry.Relative)
 		}
@@ -58,25 +89,38 @@ func Copy(ctx context.Context, destination string, entries []Entry, conflict Con
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		report(false)
 		target := filepath.Join(root, entry.Relative)
 		if protected[strings.ToLower(target)] {
 			return result, fmt.Errorf("destination would replace a source file: %s", target)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return result, err
 	}
-	last := time.Time{}
+	p.Phase = CopyTransferring
+	report(true)
+	var completedBytes int64
 	buffer := make([]byte, 256*1024)
 	for i, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		p.Path = entry.File.Name
+		var fileBytes int64
 		target := filepath.Join(root, entry.Relative)
 		err := ensureParents(root, filepath.Dir(target))
 		skipped := false
 		if err == nil {
-			skipped, err = copyOne(ctx, entry.File, target, conflict, buffer)
+			skipped, err = copyOne(ctx, entry.File, target, conflict, buffer, func(n int) {
+				fileBytes += int64(n)
+				p.BytesCopied += int64(n)
+				p.BytesDone = completedBytes + min(fileBytes, entry.File.Size)
+				report(false)
+			})
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return result, err
@@ -92,10 +136,10 @@ func Copy(ctx context.Context, destination string, entries []Entry, conflict Con
 		default:
 			result.Copied++
 		}
-		if progress != nil && (i == len(entries)-1 || time.Since(last) >= 100*time.Millisecond) {
-			progress(CopyProgress{i + 1, len(entries), result.Copied, result.Skipped, result.Failed, entry.File.Name})
-			last = time.Now()
-		}
+		completedBytes += entry.File.Size
+		p.Done, p.Copied, p.Skipped, p.Failed = i+1, result.Copied, result.Skipped, result.Failed
+		p.BytesDone = completedBytes
+		report(i == len(entries)-1 || i == 0)
 	}
 	return result, nil
 }
@@ -126,7 +170,7 @@ func ensureParents(root, dir string) error {
 	return nil
 }
 
-func copyOne(ctx context.Context, file File, target string, conflict Conflict, buffer []byte) (bool, error) {
+func copyOne(ctx context.Context, file File, target string, conflict Conflict, buffer []byte, progress func(int)) (bool, error) {
 	if info, err := os.Lstat(target); err == nil {
 		if !info.Mode().IsRegular() {
 			return false, fmt.Errorf("output is not a regular file: %s", target)
@@ -182,7 +226,7 @@ func copyOne(ctx context.Context, file File, target string, conflict Conflict, b
 	reader := contextReader{ctx, in}
 	// Hide os.File.ReadFrom so io.CopyBuffer actually uses our batch buffer,
 	// instead of allocating an extra transfer buffer for each small file.
-	written, err := io.CopyBuffer(struct{ io.Writer }{out}, reader, buffer)
+	written, err := io.CopyBuffer(progressWriter{out, progress}, reader, buffer)
 	if err != nil {
 		return false, err
 	}
@@ -227,4 +271,18 @@ func (r contextReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return r.reader.Read(p)
+}
+
+// Count successful writes, not reads, and preserve io.CopyBuffer's shared buffer.
+type progressWriter struct {
+	writer   io.Writer
+	progress func(int)
+}
+
+func (w progressWriter) Write(data []byte) (int, error) {
+	n, err := w.writer.Write(data)
+	if n > 0 && w.progress != nil {
+		w.progress(n)
+	}
+	return n, err
 }
