@@ -15,6 +15,7 @@ type planRequest struct {
 	files        []core.File
 	selected     []bool
 	layout       core.Layout
+	datalog      bool
 	scratch      []core.File
 	outputBuffer map[string]string
 }
@@ -37,7 +38,13 @@ func calculatePlan(ctx context.Context, request *planRequest) ([]core.Entry, map
 			selected = append(selected, file)
 		}
 	}
-	plan, err := core.PlanContext(ctx, selected, request.layout)
+	var plan []core.Entry
+	var err error
+	if request.datalog {
+		plan, err = core.PlanDatalogContext(ctx, selected)
+	} else {
+		plan, err = core.PlanContext(ctx, selected, request.layout)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -53,7 +60,11 @@ func calculatePlan(ctx context.Context, request *planRequest) ([]core.Entry, map
 				return nil, nil, err
 			}
 		}
-		outputs[entry.File.Path] = entry.Relative
+		if previous := outputs[entry.File.Path]; previous != "" {
+			outputs[entry.File.Path] = previous + " ; " + entry.Relative
+		} else {
+			outputs[entry.File.Path] = entry.Relative
+		}
 	}
 	return plan, outputs, nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"regexfileextractor/internal/config"
@@ -44,10 +45,16 @@ type Controller struct {
 	closeAfterCancel                       bool
 	details                                string
 	source, target                         *widget.Entry
+	minSizeKB, maxSizeKB                   *widget.Entry
+	sizeRangeValid                         bool
 	rule                                   *widget.Select
-	selection, warning                     *widget.Label
+	layoutSelect                           *equalWidthRadioGroup
+	layoutHint                             *widget.Label
+	selection, warning, sizeRangeWarning   *widget.Label
 	pattern, status                        *singleLineLabel
 	emptyView                              fyne.CanvasObject
+	sizeControls                           *fyne.Container
+	overview                               *datalogOverview
 	resultList                             *widget.List
 	resultsCard                            fyne.CanvasObject
 	selectAllCheck                         *selectionHeaderCheck
@@ -141,10 +148,12 @@ func (c *Controller) build() {
 	))
 
 	layoutSelect := newEqualWidthRadioGroup([]string{"Auto", "Group", "Flat"})
+	c.layoutSelect = layoutSelect
 	layoutSelect.Horizontal = true
 	layoutSelect.Required = true
 	layoutSelect.SetSelected(map[core.Layout]string{core.Auto: "Auto", core.Group: "Group", core.Flat: "Flat"}[c.cfg.Layout])
 	layoutHint := widget.NewLabel(c.tr(string(c.cfg.Layout) + "Hint"))
+	c.layoutHint = layoutHint
 	layoutHint.Wrapping = fyne.TextWrapWord
 	layoutSelect.OnChanged = func(value string) {
 		c.cfg.Layout = core.Layout(strings.ToLower(value))
@@ -165,18 +174,37 @@ func (c *Controller) build() {
 		}
 		c.persist()
 	}
+	c.minSizeKB = widget.NewEntry()
+	c.maxSizeKB = widget.NewEntry()
+	c.minSizeKB.SetText(strconv.FormatFloat(c.cfg.DatalogMinKB, 'f', -1, 64))
+	c.maxSizeKB.SetText(strconv.FormatFloat(c.cfg.DatalogMaxKB, 'f', -1, 64))
+	c.sizeRangeValid = true
+	c.minSizeKB.OnChanged = func(string) { c.updateDatalogSizeRange(true) }
+	c.maxSizeKB.OnChanged = func(string) { c.updateDatalogSizeRange(true) }
+	c.sizeRangeWarning = widget.NewLabel("")
+	c.sizeRangeWarning.Wrapping = fyne.TextWrapWord
+	c.sizeRangeWarning.Hide()
+	sizeHint := widget.NewLabel(c.tr("datalogSizeHint"))
+	sizeHint.Wrapping = fyne.TextWrapWord
+	c.sizeControls = container.NewVBox(
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle(c.tr("datalogSizeRange"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewGridWithColumns(2, c.minSizeKB, c.maxSizeKB),
+		sizeHint, c.sizeRangeWarning,
+	)
 	c.warning = widget.NewLabel("")
 	c.warning.Wrapping = fyne.TextWrapWord
 	right := settingsPanel(c.tr("outputs"), extractionIcon, container.NewVBox(
 		widget.NewLabelWithStyle(c.tr("layout"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		layoutSelect, layoutHint, widget.NewSeparator(),
-		fieldRow(c.tr("conflict"), conflict), c.warning,
+		fieldRow(c.tr("conflict"), conflict), c.sizeControls, c.warning,
 	))
-	c.controls = append(c.controls, c.source, c.target, browseSource, browseTarget, c.rule, add, edit, remove, copyPattern, layoutSelect, conflict)
+	c.controls = append(c.controls, c.source, c.target, browseSource, browseTarget, c.rule, add, edit, remove, copyPattern, layoutSelect, conflict, c.minSizeKB, c.maxSizeKB)
 
 	c.selection = widget.NewLabel("")
 	resultsTitle := container.NewHBox(sectionHeading(c.tr("results"), listIcon), c.selection)
-	resultsHeader := container.NewPadded(resultsTitle)
+	c.overview = newDatalogOverview()
+	resultsHeader := container.NewVBox(container.NewPadded(resultsTitle), c.overview)
 	var columnHeaders fyne.CanvasObject
 	c.resultList, columnHeaders = c.makeResults()
 	emptyTitle := canvas.NewText(c.tr("empty"), color.NRGBA{R: 31, G: 41, B: 55, A: 255})
@@ -221,6 +249,7 @@ func (c *Controller) build() {
 	body := container.New(workspaceLayout{gap: 8}, c.settings, results)
 	c.Window.SetContent(container.NewPadded(container.NewBorder(header, foot, nil, nil, body)))
 	c.refreshPlan()
+	c.Window.Content().Refresh()
 }
 
 // effectiveDestination resolves the default without changing the entry or saved preference.
@@ -284,6 +313,44 @@ func (c *Controller) refreshPattern() {
 	}
 }
 
+func (c *Controller) isDatalog() bool {
+	return c.cfg.SelectedRule == "datalog"
+}
+
+func (c *Controller) updateDatalogSizeRange(save bool) bool {
+	if c.minSizeKB == nil || c.maxSizeKB == nil {
+		return true
+	}
+	minKB, minErr := strconv.ParseFloat(strings.TrimSpace(c.minSizeKB.Text), 64)
+	maxKB, maxErr := strconv.ParseFloat(strings.TrimSpace(c.maxSizeKB.Text), 64)
+	valid := minErr == nil && maxErr == nil && minKB > 0 && maxKB >= minKB && maxKB <= 1e9
+	c.sizeRangeValid = valid
+	if !valid {
+		setLabel(c.sizeRangeWarning, c.tr("invalidDatalogSizeRange"))
+		c.sizeRangeWarning.Show()
+		if c.settings != nil {
+			c.settings.invalidateMeasure()
+			c.settings.Refresh()
+		}
+		return false
+	}
+	c.sizeRangeWarning.Hide()
+	changed := c.cfg.DatalogMinKB != minKB || c.cfg.DatalogMaxKB != maxKB
+	c.cfg.DatalogMinKB, c.cfg.DatalogMaxKB = minKB, maxKB
+	c.refreshDatalogOverview()
+	if c.resultList != nil {
+		c.resultList.Refresh()
+	}
+	if changed && save {
+		c.persist()
+	}
+	if c.settings != nil {
+		c.settings.invalidateMeasure()
+		c.settings.Refresh()
+	}
+	return true
+}
+
 func (c *Controller) invalidate() {
 	c.files = nil
 	c.planScratch = nil
@@ -327,7 +394,7 @@ func (c *Controller) refreshPlan() {
 	c.plan = nil
 	c.outputs = nil
 	c.planPending = count > 0
-	request := planRequest{version: c.planVersion, files: c.files, selected: append([]bool(nil), c.selected...), layout: c.cfg.Layout, outputBuffer: previousOutputs}
+	request := planRequest{version: c.planVersion, files: c.files, selected: append([]bool(nil), c.selected...), layout: c.cfg.Layout, datalog: c.isDatalog(), outputBuffer: previousOutputs}
 	if count == 0 {
 		c.planPending = false
 		c.applyPlan(nil, nil, nil)
@@ -369,6 +436,7 @@ func (c *Controller) refreshPlan() {
 			c.emptyView.Hide()
 		}
 	}
+	c.refreshDatalogOverview()
 	c.updateControls()
 }
 func (c *Controller) updateControls() {
@@ -378,6 +446,9 @@ func (c *Controller) updateControls() {
 		} else {
 			control.Enable()
 		}
+	}
+	if c.layoutSelect != nil {
+		setDisabled(c.layoutSelect, c.busy || c.closing || c.isDatalog())
 	}
 	if c.selectAllCheck != nil {
 		setDisabled(c.selectAllCheck, c.busy || c.closing || len(c.files) == 0)
@@ -441,6 +512,10 @@ func (c *Controller) startScan() {
 	}
 	if strings.TrimSpace(c.cfg.Source) == "" {
 		c.fail(errors.New(c.tr("chooseSource")))
+		return
+	}
+	if c.isDatalog() && !c.updateDatalogSizeRange(false) {
+		c.fail(errors.New(c.tr("invalidDatalogSizeRange")))
 		return
 	}
 	if !c.persist() {

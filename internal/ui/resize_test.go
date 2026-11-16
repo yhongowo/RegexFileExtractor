@@ -13,6 +13,7 @@ import (
 
 func TestResizeAndVirtualization(t *testing.T) {
 	c := testController(t)
+	c.cfg.SelectedRule = "spectrum"
 	c.files = make([]core.File, 10000)
 	c.selected = make([]bool, len(c.files))
 	for i := range c.files {

@@ -425,3 +425,58 @@ func TestPlanContextCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDatalogPlanAndCompleteness(t *testing.T) {
+	files := []File{
+		{Path: "b/X01Y01.csv", Name: "X01Y01.csv"},
+		{Path: "c/X02Y02.csv", Name: "X02Y02.csv"},
+		{Path: "a/X01Y01.csv", Name: "X01Y01.csv"},
+	}
+	plan, err := PlanDatalog(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"corr/X01Y01/X01Y01.csv",
+		"grr/X01Y01/X01Y01_001.csv",
+		"grr/X01Y01/X01Y01_002.csv",
+		"corr/X02Y02/X02Y02.csv",
+		"grr/X02Y02/X02Y02_001.csv",
+	}
+	if len(plan) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(plan), len(want))
+	}
+	for i, entry := range plan {
+		if got := filepath.ToSlash(entry.Relative); got != want[i] {
+			t.Fatalf("%d: got %s, want %s", i, got, want[i])
+		}
+	}
+	if plan[0].File.Path != "a/X01Y01.csv" || plan[3].File.Path != "c/X02Y02.csv" {
+		t.Fatal("Corr did not select the first source-path-ordered test")
+	}
+	for _, tt := range []struct {
+		size int64
+		want bool
+	}{
+		{61 * 1024, true}, {65 * 1024, true},
+		{61*1024 - 1, false}, {65*1024 + 1, false},
+	} {
+		if got := IsDatalogComplete(tt.size, 61, 65); got != tt.want {
+			t.Fatalf("size %d: got %v, want %v", tt.size, got, tt.want)
+		}
+	}
+	if _, err := PlanDatalog([]File{{Path: "a/not-die.csv", Name: "not-die.csv"}}); err == nil {
+		t.Fatal("accepted a Datalog file without die coordinates")
+	}
+}
+
+func TestDatalogCoordinateNormalizesLeadingZeros(t *testing.T) {
+	a, _, err := DatalogCoordinate("X01Y01.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := DatalogCoordinate("x1y1.CSV")
+	if err != nil || a != b {
+		t.Fatalf("equivalent coordinates differ: %q / %q, %v", a, b, err)
+	}
+}

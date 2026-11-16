@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 
+	"regexfileextractor/internal/core"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
@@ -16,7 +18,7 @@ type resultRow struct {
 	owner    *Controller
 	id       int
 	check    *widget.Check
-	labels   [5]*singleLineLabel
+	labels   [6]*singleLineLabel
 	content  *fyne.Container
 	fileSize int64
 	filePath string
@@ -62,7 +64,14 @@ func (r *resultRow) update(id int) {
 		r.filePath = f.Path
 		r.fileSize = f.Size
 	}
-	values := [5]string{f.Name, f.Path, size, f.Rule, c.outputs[f.Path]}
+	completeness := ""
+	if c.isDatalog() {
+		completeness = c.tr("abnormalDatalog")
+		if core.IsDatalogComplete(f.Size, c.cfg.DatalogMinKB, c.cfg.DatalogMaxKB) {
+			completeness = c.tr("completeDatalog")
+		}
+	}
+	values := [6]string{f.Name, f.Path, size, f.Rule, c.outputs[f.Path], completeness}
 	for i, value := range values {
 		r.labels[i].SetText(value)
 	}
@@ -72,9 +81,9 @@ func (r *resultRow) update(id int) {
 // Header and rows use the same geometry and reserve space for the vertical bar.
 type resultColumns struct{}
 
-func (resultColumns) MinSize([]fyne.CanvasObject) fyne.Size { return fyne.NewSize(520, 32) }
+func (resultColumns) MinSize([]fyne.CanvasObject) fyne.Size { return fyne.NewSize(590, 32) }
 func (resultColumns) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	if len(objects) != 6 {
+	if len(objects) != 7 {
 		return
 	}
 	width := max(float32(0), size.Width-theme.Size(theme.SizeNameScrollBar)-6)
@@ -86,11 +95,11 @@ func (resultColumns) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 		x += widths[i]
 	}
 }
-func resultColumnWidths(width float32) [6]float32 {
-	check, size := float32(32), float32(68)
-	remaining := max(float32(0), width-check-size)
-	name, path, rule := remaining*.20, remaining*.38, remaining*.13
-	return [6]float32{check, name, path, size, rule, remaining - name - path - rule}
+func resultColumnWidths(width float32) [7]float32 {
+	check, size, completeness := float32(32), float32(68), float32(70)
+	remaining := max(float32(0), width-check-size-completeness)
+	name, path, rule := remaining*.18, remaining*.35, remaining*.12
+	return [7]float32{check, name, path, size, rule, remaining - name - path - rule, completeness}
 }
 
 type selectionHeaderCheck struct {
@@ -114,12 +123,20 @@ func (c *Controller) makeResults() (*widget.List, fyne.CanvasObject) {
 			return
 		}
 		f := c.files[id]
-		c.showText(c.tr("fileDetails"), fmt.Sprintf("%s: %s\n%s: %s\n%s: %s (%d B)\n%s: %s\n%s: %s", c.tr("filename"), f.Name, c.tr("path"), f.Path, c.tr("size"), formatSize(f.Size), f.Size, c.tr("matchedRule"), f.Rule, c.tr("outputPath"), c.outputs[f.Path]))
+		details := fmt.Sprintf("%s: %s\n%s: %s\n%s: %s (%d B)\n%s: %s\n%s: %s", c.tr("filename"), f.Name, c.tr("path"), f.Path, c.tr("size"), formatSize(f.Size), f.Size, c.tr("matchedRule"), f.Rule, c.tr("outputPath"), c.outputs[f.Path])
+		if c.isDatalog() {
+			state := c.tr("abnormalDatalog")
+			if core.IsDatalogComplete(f.Size, c.cfg.DatalogMinKB, c.cfg.DatalogMaxKB) {
+				state = c.tr("completeDatalog")
+			}
+			details += fmt.Sprintf("\n%s: %s", c.tr("datalogIntegrity"), state)
+		}
+		c.showText(c.tr("fileDetails"), details)
 		list.UnselectAll()
 	}
 	c.selectAllCheck = newSelectionHeaderCheck(c.tr("all"), func(checked bool) { c.selectAll(checked) })
 	headers := []fyne.CanvasObject{c.selectAllCheck}
-	for _, key := range []string{"filename", "path", "size", "matchedRule", "outputPath"} {
+	for _, key := range []string{"filename", "path", "size", "matchedRule", "outputPath", "datalogIntegrity"} {
 		label := newSingleLineLabel(c.tr(key))
 		headers = append(headers, label)
 	}

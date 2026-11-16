@@ -28,6 +28,7 @@ func testController(t *testing.T) *Controller {
 	return c
 }
 func seedResults(c *Controller) {
+	c.cfg.SelectedRule = "spectrum"
 	c.files = []core.File{
 		{Path: `D:\TestData\Batch_A\X01Y01.csv`, Name: "X01Y01.csv", Size: 18243, Rule: "XY CSV"},
 		{Path: `D:\TestData\Batch_B\X01Y01.csv`, Name: "X01Y01.csv", Size: 20481, Rule: "XY CSV"},
@@ -37,6 +38,48 @@ func seedResults(c *Controller) {
 	c.selected = []bool{true, true, true, true}
 	c.refreshPlan()
 }
+
+func TestDatalogPreviewAndSizeOverview(t *testing.T) {
+	c := testController(t)
+	c.files = []core.File{
+		{Path: "b/X01Y01.csv", Name: "X01Y01.csv", Size: 60 * 1024, Rule: "Datalog"},
+		{Path: "a/X01Y01.csv", Name: "X01Y01.csv", Size: 61 * 1024, Rule: "Datalog"},
+	}
+	c.selected = []bool{true, true}
+	c.refreshPlan()
+	if len(c.plan) != 3 || !c.overview.Visible() {
+		t.Fatalf("Datalog preview not ready: %d entries", len(c.plan))
+	}
+	firstOutput := filepath.Join("corr", "X01Y01", "X01Y01.csv") + " ; " + filepath.Join("grr", "X01Y01", "X01Y01_001.csv")
+	if got := c.outputs["a/X01Y01.csv"]; got != firstOutput {
+		t.Fatalf("first die output: %q", got)
+	}
+	if got := c.outputs["b/X01Y01.csv"]; got != filepath.Join("grr", "X01Y01", "X01Y01_002.csv") {
+		t.Fatalf("repeat output: %q", got)
+	}
+	if c.overview.bar.good != 1 || c.overview.bar.bad != 1 {
+		t.Fatalf("wrong size overview: %+v", c.overview.bar)
+	}
+	row := newResultRow(c)
+	row.update(0)
+	if row.labels[5].Text != c.tr("abnormalDatalog") {
+		t.Fatalf("wrong row state: %q", row.labels[5].Text)
+	}
+	c.minSizeKB.SetText("60")
+	if !c.sizeRangeValid || c.overview.bar.good != 2 || c.overview.bar.bad != 0 {
+		t.Fatal("size range change did not refresh overview")
+	}
+	c.maxSizeKB.SetText("59")
+	if c.sizeRangeValid {
+		t.Fatal("accepted max below min")
+	}
+	c.cfg.SelectedRule = "spectrum"
+	c.refreshPlan()
+	if c.overview.Visible() || len(c.plan) != 2 {
+		t.Fatal("ordinary rules did not retain their original layout")
+	}
+}
+
 func TestSelectionAndInvalidation(t *testing.T) {
 	c := testController(t)
 	if !c.copy.Disabled() {
@@ -231,6 +274,23 @@ func TestRenderScreenshots(t *testing.T) {
 			}
 			file.Close()
 		}
+	}
+	c.cfg.SelectedRule = "datalog"
+	c.files[0].Size, c.files[1].Size = 62*1024, 64*1024
+	c.files[2].Size, c.files[3].Size = 60*1024, 66*1024
+	c.refreshPlan()
+	for _, lang := range []string{"zh", "en"} {
+		c.cfg.Language = lang
+		c.build()
+		c.Window.Resize(fyne.NewSize(1100, 760))
+		file, err := os.Create(filepath.Join(dir, "ui-datalog-"+lang+".png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(file, c.Window.Canvas().Capture()); err != nil {
+			t.Fatal(err)
+		}
+		file.Close()
 	}
 }
 
