@@ -11,6 +11,7 @@ import (
 )
 
 func seedLargeResults(c *Controller, n int) {
+	c.cfg.SelectedRule = "spectrum"
 	c.files = make([]core.File, n)
 	c.selected = make([]bool, n)
 	for i := range c.files {
@@ -130,7 +131,7 @@ func TestAsyncScanAndCopy(t *testing.T) {
 		t.Fatal("scan did not start")
 	}
 	awaitBackground(t, c)
-	if len(c.plan) != 1 || c.copy.Disabled() {
+	if len(c.plan) != 2 || c.copy.Disabled() {
 		t.Fatal("scan result did not become ready")
 	}
 	c.startCopy()
@@ -138,9 +139,11 @@ func TestAsyncScanAndCopy(t *testing.T) {
 		t.Fatal("copy did not enter checking phase")
 	}
 	awaitBackground(t, c)
-	data, err := os.ReadFile(filepath.Join(source, "extracted", "X01Y01.csv"))
-	if err != nil || string(data) != "payload" {
-		t.Fatalf("copy: %q %v", data, err)
+	for _, relative := range []string{filepath.Join("grr", "X01Y01", "X01Y01_001.csv"), filepath.Join("corr", "X01Y01", "X01Y01.csv")} {
+		data, err := os.ReadFile(filepath.Join(source, "extracted", relative))
+		if err != nil || string(data) != "payload" {
+			t.Fatalf("copy %s: %q %v", relative, data, err)
+		}
 	}
 	if c.activity.Visible() || c.progress.Visible() || c.details == "" {
 		t.Fatal("copy did not restore idle state")

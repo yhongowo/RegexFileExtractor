@@ -20,10 +20,13 @@ type Config struct {
 	Destination  string        `json:"destination"`
 	Layout       core.Layout   `json:"layout"`
 	Conflict     core.Conflict `json:"conflict"`
+	DatalogMinKB float64       `json:"datalog_min_kb"`
+	DatalogMaxKB float64       `json:"datalog_max_kb"`
 }
 
 func Default() Config {
 	return Config{Version: 1, Language: "zh", Layout: core.Auto, Conflict: core.Skip,
+		DatalogMinKB: core.DefaultDatalogMinKB, DatalogMaxKB: core.DefaultDatalogMaxKB,
 		Rules: []core.Rule{
 			{ID: "spectrum", Name: "Spectrum_Data", Pattern: `(?:Spectrum_Data_)?X\d+Y\d+\.csv`},
 			{ID: "datalog", Name: "Datalog", Pattern: `X\d+Y\d+\.csv`}},
@@ -46,7 +49,8 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Default(), err
 	}
-	var cfg Config
+	// Defaults preserve newly added settings when loading an older config file.
+	cfg := Default()
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Default(), err
 	}
@@ -68,6 +72,9 @@ func (c Config) Validate() error {
 	}
 	if c.Conflict != core.Skip && c.Conflict != core.Overwrite {
 		return fmt.Errorf("invalid conflict policy")
+	}
+	if !(c.DatalogMinKB > 0) || !(c.DatalogMaxKB >= c.DatalogMinKB) || c.DatalogMaxKB > 1e9 {
+		return fmt.Errorf("invalid Datalog size range")
 	}
 	ids := map[string]bool{}
 	names := make([]string, 0, len(c.Rules))

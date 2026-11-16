@@ -48,6 +48,7 @@ func BenchmarkPreviewSelection(b *testing.B) {
 	a := test.NewApp()
 	a.Settings().SetTheme(Theme())
 	c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
+	c.cfg.SelectedRule = "spectrum"
 	installTestDispatcher(b, c)
 	defer a.Quit()
 	defer func() { awaitBackground(b, c) }()
@@ -72,6 +73,7 @@ func BenchmarkWindowResizeWithResults(b *testing.B) {
 	a := test.NewApp()
 	a.Settings().SetTheme(Theme())
 	c := New(a, config.Default(), filepath.Join(b.TempDir(), "config.json"), nil)
+	c.cfg.SelectedRule = "spectrum"
 	installTestDispatcher(b, c)
 	defer a.Quit()
 	defer func() { awaitBackground(b, c) }()

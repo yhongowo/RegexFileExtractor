@@ -57,6 +57,21 @@ func TestInvalidConfigIsPreserved(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestOldConfigUsesDatalogDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacy := []byte(`{"version":1,"language":"zh","rules":[{"id":"datalog","name":"Datalog","pattern":"X\\d+Y\\d+\\.csv"}],"selected_rule":"datalog","layout":"auto","conflict":"skip"}`)
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatalogMinKB != 61 || cfg.DatalogMaxKB != 65 {
+		t.Fatalf("missing defaults: %+v", cfg)
+	}
+}
+
 func TestValidationBeforeSaving(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := Default()
